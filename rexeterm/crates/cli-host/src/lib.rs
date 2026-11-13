@@ -409,8 +409,7 @@ mod tests {
     #[test]
     fn binding_is_machine_wide() {
         let root = tempfile::tempdir().unwrap();
-        let registry =
-            Registry::for_boot(root.path().join("runtime"), "boot-a".into()).unwrap();
+        let registry = Registry::for_boot(root.path().join("runtime"), "boot-a".into()).unwrap();
         let a = tempfile::tempdir().unwrap();
         let b = tempfile::tempdir().unwrap();
         registry.write_binding("abcdef0123456789").unwrap();

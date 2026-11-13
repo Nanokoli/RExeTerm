@@ -15,4 +15,4 @@ Application owns saved hosts, bounded PTY preview and file jobs; reuse the share
 Keep local execution optional in daemon, SDK RE capabilities in sibling rexed, shell preferences in AppCore.
 Do not duplicate router/session/preference state. Preserve stdout framing, limits, Origin validation and explicit shutdown.
 Run boundaries, fmt, default/all-feature strict workspace Clippy/tests and doctests. Chinese docs follow ../rexed/docs/documentation-guide.md.
-Preserve prior work and Git index. REFS and the standalone pty-t project are retired. Never claim unimplemented GUI, auth or SSH capabilities.
+Preserve prior work and Git index. Never claim unimplemented GUI, auth or SSH capabilities.

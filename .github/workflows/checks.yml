@@ -1,0 +1,65 @@
+name: checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Dependency boundaries
+        run: bash rexed/scripts/check-boundaries.sh
+
+      - name: Clippy (rexed)
+        run: >
+          cargo clippy --locked --all-targets
+          -p remote_executor -p rexe-client
+          -p remote_executor_protocol -p remote_executor_transport
+          -p remote_executor_data -p remote_executor_terminal
+          -p remote_executor_server
+          -- -D warnings
+
+      - name: Clippy (rexeterm)
+        run: >
+          cargo clippy --locked --all-targets
+          -p rexeterm-cli -p rexeterm-appcore -p rexeterm-application
+          -p rexeterm-daemon -p rexeterm-cli-host -p rexeterm-config
+          -p rexeterm-adapter-common -p rexeterm-mcp-common
+          -p rexeterm-mcp-stdio-adapt -p rexeterm-mcp-http-adapt
+          -p rexeterm-http-adapt
+          -- -D warnings
+
+      - name: Tests (rexed)
+        run: cargo test --locked -p remote_executor -p rexe-client
+
+      - name: Tests (rexeterm)
+        run: >
+          cargo test --locked
+          -p rexeterm-cli -p rexeterm-appcore -p rexeterm-cli-host -p rexeterm-config
+
+      - name: Doctests
+        run: cargo test --locked --doc -p remote_executor -p rexeterm-cli

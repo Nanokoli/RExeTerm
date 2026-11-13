@@ -3,7 +3,7 @@
 ## 范围
 
 `remote_executor_terminal` 是 RE 自有的 PTY 与进程运行时，直接依赖 `portable-pty` 和并发基础库。
-它承接原 pty-t core 的行为，由 RE 维护；没有 WebSocket、SSH、HTTP 或 RE 网络协议依赖。
+它由 RE 维护，不依赖 WebSocket、SSH、HTTP 或 RE 网络协议依赖。
 
 ## 内部结构
 
@@ -99,7 +99,7 @@ exbash 有输入的 attach 通过同一服务层申请主控并写入，也遵�
 
 终端消息定义由 RE 的 [protocol/terminal.rs](../../crates/protocol/src/terminal.rs) 持有。
 现有 `ptyt`/`ptyc` 消息继续兼容；远端管理只允许列表与详情。
-独立 pty-t 项目已移除；会话内核和协议由 RE 内部模块维护。
+会话内核和协议由 RE 内部模块维护。
 
 ## 验证与裁剪边界
 

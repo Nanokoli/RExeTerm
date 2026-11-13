@@ -12,22 +12,21 @@ use std::{
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
-    let args = match Args::try_parse_from(rexeterm_cli::commands::normalize_argv(
-        std::env::args_os(),
-    )) {
-        Ok(args) => args,
-        Err(error) => {
-            if matches!(
-                error.kind(),
-                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
-            ) {
-                print!("{error}");
-                return ExitCode::SUCCESS;
+    let args =
+        match Args::try_parse_from(rexeterm_cli::commands::normalize_argv(std::env::args_os())) {
+            Ok(args) => args,
+            Err(error) => {
+                if matches!(
+                    error.kind(),
+                    clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+                ) {
+                    print!("{error}");
+                    return ExitCode::SUCCESS;
+                }
+                eprint!("{}", markdown::error(&error.to_string()));
+                return ExitCode::from(2);
             }
-            eprint!("{}", markdown::error(&error.to_string()));
-            return ExitCode::from(2);
-        }
-    };
+        };
     // Where .rexeterm/ lives is never a CLI argument: use cd, or set REXETERM_CWD
     // for callers that cannot change the process directory themselves.
     if let Some(directory) = std::env::var_os("REXETERM_CWD") {

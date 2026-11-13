@@ -20,7 +20,8 @@ pub(super) fn render(response: &mut ExecutorResponse) {
     let cols = terminal["cols"].as_u64().unwrap_or(80).clamp(1, 4096) as u16;
     let rows = terminal["rows"].as_u64().unwrap_or(24).clamp(1, 4096) as u16;
     let text = result["output"]["text"].as_str().unwrap_or_default();
-    let mut terminal = avt::Terminal::new(cols as usize, rows as usize).expect("terminal size is non-zero");
+    let mut terminal =
+        avt::Terminal::new(cols as usize, rows as usize).expect("terminal size is non-zero");
     terminal.feed(text);
     let mut lines: Vec<_> = terminal
         .screen()
@@ -64,7 +65,6 @@ mod tests {
         render(&mut plain);
         assert_eq!(plain.result.unwrap()["output"]["text"], "untouched\rtext");
     }
-
 
     #[test]
     fn render_keeps_mapped_box_characters() {

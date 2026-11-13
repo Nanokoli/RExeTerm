@@ -5,10 +5,7 @@ use crate::ipc_client::IpcClient;
 use anyhow::{Context, Result};
 use rexeterm_appcore::preferences::ClientSettingsStore;
 use serde_json::{json, Value};
-use std::{
-    fs,
-    path::PathBuf,
-};
+use std::{fs, path::PathBuf};
 
 /// Executor facts the CLI needs to resolve a shell command on its own.
 #[derive(Clone, Debug, Default)]
@@ -55,9 +52,7 @@ pub async fn executor_facts(client: &IpcClient, host: &str) -> Result<ExecutorFa
 pub fn layers(executor: &str, directory: Option<&str>) -> Result<Value> {
     let store = store()?;
     let stored = serde_json::to_value(store.settings())?;
-    let layer = |name: &str, value: Option<Value>| {
-        json!({"layer": name, "shells": value.unwrap_or(Value::Null)})
-    };
+    let layer = |name: &str, value: Option<Value>| json!({"layer": name, "shells": value.unwrap_or(Value::Null)});
     Ok(json!({
         "layers": [
             layer("global", stored.get("shells").cloned()),

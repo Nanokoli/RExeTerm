@@ -34,9 +34,7 @@ impl Default for Options {
 
 impl Options {
     fn inline(&self) -> bool {
-        self.sinks
-            .iter()
-            .any(|sink| matches!(sink, Sink::Text))
+        self.sinks.iter().any(|sink| matches!(sink, Sink::Text))
     }
     fn to_file(&self) -> bool {
         self.sinks
@@ -209,7 +207,11 @@ fn emit_payload(
                 }
             }
         }
-        if options.sinks.iter().any(|sink| matches!(sink, Sink::File | Sink::Raw)) {
+        if options
+            .sinks
+            .iter()
+            .any(|sink| matches!(sink, Sink::File | Sink::Raw))
+        {
             let ext = extension(io, body);
             sinks.push((ext, body.as_bytes().to_vec(), mode(io, true, meta, body)));
         }
@@ -249,7 +251,12 @@ fn task_card(meta: &Value, output: &Value, options: &Options, out: &mut String) 
     // not the command line: argv[0] plus its leading flags.
     let argv: Vec<String> = meta["argv"]
         .as_array()
-        .map(|argv| argv.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .map(|argv| {
+            argv.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     let mut shell: Vec<&str> = Vec::new();
     for (index, part) in argv.iter().enumerate() {
@@ -314,10 +321,13 @@ fn task_card(meta: &Value, output: &Value, options: &Options, out: &mut String) 
     let mut footer: Vec<(&str, String)> = Vec::new();
     for key in ["startedAt", "endedAt", "outputLimitBytes"] {
         if let Some(value) = meta.get(key).filter(|value| !value.is_null()) {
-            footer.push((key, match value {
-                Value::String(text) => text.clone(),
-                other => other.to_string(),
-            }));
+            footer.push((
+                key,
+                match value {
+                    Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                },
+            ));
         }
     }
     if !footer.is_empty() {
@@ -326,14 +336,16 @@ fn task_card(meta: &Value, output: &Value, options: &Options, out: &mut String) 
         }
         out.push('\n');
     }
-
 }
 
 fn mode(io: &str, file: bool, meta: &Value, body: &str) -> String {
     let render = if body.starts_with('\u{89}') {
         "png"
     } else if io == "pty" {
-        match meta["terminalOutput"]["format"].as_str().unwrap_or_default() {
+        match meta["terminalOutput"]["format"]
+            .as_str()
+            .unwrap_or_default()
+        {
             "client-screen-v1" => "tui",
             _ => "raw",
         }
@@ -354,7 +366,11 @@ fn fields(value: &Value, depth: usize, options: &Options, out: &mut String) {
     // Tool payloads have their own text representation; do not print duplicate JSON text.
     if let Some(obj) = value.as_object() {
         if obj.contains_key("metadata") && obj.contains_key("output") {
-            if obj["metadata"].get("asyncID").and_then(Value::as_str).is_some() {
+            if obj["metadata"]
+                .get("asyncID")
+                .and_then(Value::as_str)
+                .is_some()
+            {
                 task_card(&obj["metadata"], &obj["output"], options, out);
                 return;
             }

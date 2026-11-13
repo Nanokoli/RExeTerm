@@ -167,7 +167,10 @@ pub async fn execute(
                 .find(|record| record.target.is_some());
             let (record, reused) = match live {
                 Some(record) => (record, true),
-                None => (start(registry, registry.reserve(&config, local)?).await?, false),
+                None => (
+                    start(registry, registry.reserve(&config, local)?).await?,
+                    false,
+                ),
             };
             registry.write_binding(&record.id)?;
             Ok(
@@ -197,10 +200,7 @@ pub async fn execute(
         }
         ServiceCommand::Info => {
             let planned = registry.read_uuid();
-            let bound = registry
-                .read_binding(cwd)
-                .ok()
-                .or_else(|| planned.clone());
+            let bound = registry.read_binding(cwd).ok().or_else(|| planned.clone());
             let Some(id) = bound else {
                 return Ok(json!({
                     "serviceId": Value::Null,
@@ -279,15 +279,11 @@ pub fn selected(registry: &Registry, explicit: Option<&str>, cwd: &Path) -> Resu
     if let Some(explicit) = explicit {
         return rexeterm_cli_host::normalize_id(explicit);
     }
-    registry
-        .read_binding(cwd)
-        .or_else(|_| {
-            registry.read_uuid().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "no CLI host binding: run service bind <UUID64> or service create"
-                )
-            })
+    registry.read_binding(cwd).or_else(|_| {
+        registry.read_uuid().ok_or_else(|| {
+            anyhow::anyhow!("no CLI host binding: run service bind <UUID64> or service create")
         })
+    })
 }
 pub async fn bind(registry: &Registry, id: &str, cwd: &Path) -> Result<Value> {
     let id = rexeterm_cli_host::normalize_id(id)?;

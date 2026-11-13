@@ -49,7 +49,7 @@ cargo build -p rexeterm --no-default-features --features admin --bin rexctl
 
 AppCore 的 Client 和偏好 API 保留。AppHost::core 与 Daemon::core 返回该共享状态核心。
 旧 HTTP 每会话独立应用核心的行为已改为共享 App 状态；DELETE/关闭 HTTP 不再退出 RE 会话。
-需身份隔离时创建独立核心或独立产品实例。RE 线上协议及偏好文件格式未改；旧 REFS 独立项目已移除。
+需身份隔离时创建独立核心或独立产品实例。RE 线上协议及偏好文件格式未改。
 
 ```rust
 use rexeterm_daemon::{Daemon, DaemonOptions};

@@ -111,22 +111,50 @@ pub struct Args {
     )]
     pub executor: Option<String>,
     /// Host UUID64; otherwise take the machine binding written beside the executable.
-    #[arg(long, global = true, help_heading = "Global options", display_order = 900)]
+    #[arg(
+        long,
+        global = true,
+        help_heading = "Global options",
+        display_order = 900
+    )]
     service_id: Option<String>,
     /// Where service bindings live; defaults to the platform registry directory.
-    #[arg(long, global = true, help_heading = "Global options", display_order = 901)]
+    #[arg(
+        long,
+        global = true,
+        help_heading = "Global options",
+        display_order = 901
+    )]
     registry_dir: Option<PathBuf>,
     /// Whole invocation deadline; timing out does not undo a host operation.
     #[arg(long, global=true, default_value_t=30000, value_parser=clap::value_parser!(u64).range(1..=600000), help_heading = "Global options", display_order = 902)]
     pub timeout_ms: u64,
     /// Payload sinks; repeat or comma-separate: text, file, raw, png, tui.
-    #[arg(long, global = true, value_delimiter = ',', default_value = "text", help_heading = "Global options", display_order = 903)]
+    #[arg(
+        long,
+        global = true,
+        value_delimiter = ',',
+        default_value = "text",
+        help_heading = "Global options",
+        display_order = 903
+    )]
     pub sink: Vec<Sink>,
     /// Directory for sink files; defaults to ./.rexeterm-out in the current directory.
-    #[arg(long, global = true, help_heading = "Global options", display_order = 904)]
+    #[arg(
+        long,
+        global = true,
+        help_heading = "Global options",
+        display_order = 904
+    )]
     pub out_dir: Option<PathBuf>,
     /// Inline text is cut after this many bytes; the full body still goes to file.
-    #[arg(long, global = true, default_value_t = 65536, help_heading = "Global options", display_order = 905)]
+    #[arg(
+        long,
+        global = true,
+        default_value_t = 65536,
+        help_heading = "Global options",
+        display_order = 905
+    )]
     pub text_limit: usize,
     /// Run a command without naming `run`: rexeterm -e local -cmd 'ls -la'.
     #[arg(long = "cmd", value_name = "COMMAND")]
@@ -233,7 +261,7 @@ pub struct Args {
     )]
     pub pty: Option<String>,
     #[command(subcommand)]
-    pub command: Option<Command>,
+    command: Option<Command>,
 }
 
 /// Where a payload block can go. A single call may pick several.
@@ -396,7 +424,8 @@ impl FileCommand {
 }
 impl TransferCommand {
     fn set_executor(&mut self, id: &str) {
-        if let TransferCommand::Create { host, .. } | TransferCommand::HostFile { host, .. } = self {
+        if let TransferCommand::Create { host, .. } | TransferCommand::HostFile { host, .. } = self
+        {
             *host = id.to_owned();
         }
     }
@@ -408,21 +437,6 @@ impl ForwardCommand {
             | ForwardCommand::Start { host, .. }
             | ForwardCommand::Stop { host, .. } => *host = id.to_owned(),
         }
-    }
-}
-impl HostCommand {
-    fn set_executor(&mut self, id: &str) {
-        let host = match self {
-            HostCommand::Show { host }
-            | HostCommand::Add { host, .. }
-            | HostCommand::Edit { host, .. }
-            | HostCommand::Remove { host }
-            | HostCommand::Connect { host }
-            | HostCommand::Disconnect { host }
-            | HostCommand::Status { host } => host,
-            HostCommand::List => return,
-        };
-        *host = id.to_owned();
     }
 }
 impl PreferenceCommand {
@@ -777,26 +791,6 @@ struct ReadArgs {
     limit: Option<u64>,
     #[arg(long)]
     hash: bool,
-    #[arg(long = "rcwd", id = "rcwd", value_name = "DIR")]
-    cwd: Option<String>,
-}
-#[derive(ClapArgs)]
-struct SearchArgs {
-    /// Executor name.
-    #[arg(skip)]
-    host: String,
-    /// Regular expression to search for.
-    pattern: String,
-    #[arg(long)]
-    root: Option<String>,
-    #[arg(long)]
-    path: Option<String>,
-    #[arg(long)]
-    glob: Vec<String>,
-    #[arg(long)]
-    ignore_case: bool,
-    #[arg(long, default_value_t=100, value_parser=clap::value_parser!(u32).range(1..=10000))]
-    max_count: u32,
     #[arg(long = "rcwd", id = "rcwd", value_name = "DIR")]
     cwd: Option<String>,
 }
@@ -1481,7 +1475,14 @@ async fn file_verb(client: &IpcClient, verb: FileVerb) -> Result<Value> {
     };
     let cwd = target.cwd.clone();
     params["filePath"] = json!(target.path);
-    rpc(client, Some(&target.host), "FileAction", params, cwd.as_deref()).await
+    rpc(
+        client,
+        Some(&target.host),
+        "FileAction",
+        params,
+        cwd.as_deref(),
+    )
+    .await
 }
 fn transfer_body(
     mode: Direction,
@@ -1611,10 +1612,7 @@ pub async fn execute(mut args: Args) -> Result<Value> {
 
 async fn default_executor(client: &IpcClient) -> Result<String> {
     let value = client
-        .call(
-            "rpc",
-            json!({"tool":"list_executor","params":{}}),
-        )
+        .call("rpc", json!({"tool":"list_executor","params":{}}))
         .await?;
     value["metadata"]["default"]
         .as_str()
@@ -1864,11 +1862,9 @@ async fn preferences_command(client: &IpcClient, command: PreferenceCommand) -> 
                 interactive_args,
                 default,
             ),
-            ShellCommand::Default { name, host, cwd } => preferences::set_default(
-                host.as_deref().unwrap_or_default(),
-                cwd.as_deref(),
-                &name,
-            ),
+            ShellCommand::Default { name, host, cwd } => {
+                preferences::set_default(host.as_deref().unwrap_or_default(), cwd.as_deref(), &name)
+            }
         },
         PreferenceCommand::Reload => client.call("preferences.reload", json!({})).await,
     }
@@ -1896,10 +1892,7 @@ async fn executor_command(client: &IpcClient, command: ExecutorCommand) -> Resul
         ExecutorCommand::Status { host } => {
             host_command(client, HostCommand::Status { host }).await
         }
-        ExecutorCommand::Connect {
-            options_file,
-            host,
-        } => match options_file {
+        ExecutorCommand::Connect { options_file, host } => match options_file {
             Some(file) => {
                 let params = parse_object(&tokio::fs::read_to_string(file).await?)?;
                 // SDK connection configuration contains secrets; never echo it into output.
@@ -1907,16 +1900,12 @@ async fn executor_command(client: &IpcClient, command: ExecutorCommand) -> Resul
                 rpc(client, id.as_deref(), "connect_to_executor", params, None).await
             }
             None => {
-                ensure!(!host.is_empty(), "name the executor to connect: -e <EXECUTOR>");
+                ensure!(
+                    !host.is_empty(),
+                    "name the executor to connect: -e <EXECUTOR>"
+                );
                 let entry = crate::executors::load(&host)?;
-                rpc(
-                    client,
-                    Some(&host),
-                    "connect_to_executor",
-                    entry,
-                    None,
-                )
-                .await
+                rpc(client, Some(&host), "connect_to_executor", entry, None).await
             }
         },
         ExecutorCommand::Disconnect { host } => {

@@ -58,11 +58,7 @@ impl Default for Style {
 fn parse_color(text: &str) -> Option<[u8; 3]> {
     if let Some(hex) = text.strip_prefix('#') {
         let value = u32::from_str_radix(hex, 16).ok()?;
-        return Some([
-            (value >> 16) as u8,
-            (value >> 8) as u8,
-            value as u8,
-        ]);
+        return Some([(value >> 16) as u8, (value >> 8) as u8, value as u8]);
     }
     let index: u8 = text.parse().ok()?;
     const BASE: [[u8; 3]; 16] = [
@@ -111,17 +107,17 @@ fn vt_color(color: Option<avt::Color>) -> Option<[u8; 3]> {
 /// Which edges a box-drawing character connects: up, down, left, right.
 fn box_edges(ch: char) -> Option<[bool; 4]> {
     Some(match ch {
-        '\u{2500}' => [false, false, true, true],   // ─
-        '\u{2502}' => [true, true, false, false],   // │
-        '\u{250c}' => [false, true, false, true],   // ┌
-        '\u{2510}' => [false, true, true, false],   // ┐
-        '\u{2514}' => [true, false, false, true],   // └
-        '\u{2518}' => [true, false, true, false],   // ┘
-        '\u{251c}' => [true, true, false, true],    // ├
-        '\u{2524}' => [true, true, true, false],    // ┤
-        '\u{252c}' => [false, true, true, true],    // ┬
-        '\u{2534}' => [true, false, true, true],    // ┴
-        '\u{253c}' => [true, true, true, true],     // ┼
+        '\u{2500}' => [false, false, true, true], // ─
+        '\u{2502}' => [true, true, false, false], // │
+        '\u{250c}' => [false, true, false, true], // ┌
+        '\u{2510}' => [false, true, true, false], // ┐
+        '\u{2514}' => [true, false, false, true], // └
+        '\u{2518}' => [true, false, true, false], // ┘
+        '\u{251c}' => [true, true, false, true],  // ├
+        '\u{2524}' => [true, true, true, false],  // ┤
+        '\u{252c}' => [false, true, true, true],  // ┬
+        '\u{2534}' => [true, false, true, true],  // ┴
+        '\u{253c}' => [true, true, true, true],   // ┼
         _ => return None,
     })
 }
@@ -152,7 +148,11 @@ fn draw_box(
     let [up, down, left, right] = edges;
     if left || right {
         let from = if left { x0 } else { mid_x };
-        let to = if right { x0 + cell_width as i32 - 1 } else { mid_x };
+        let to = if right {
+            x0 + cell_width as i32 - 1
+        } else {
+            mid_x
+        };
         for x in from..=to {
             for offset in 0..thickness {
                 fill(canvas, width, height, x, mid_y + offset, color);
@@ -161,7 +161,11 @@ fn draw_box(
     }
     if up || down {
         let from = if up { y0 } else { mid_y };
-        let to = if down { y0 + cell_height as i32 - 1 } else { mid_y };
+        let to = if down {
+            y0 + cell_height as i32 - 1
+        } else {
+            mid_y
+        };
         for y in from..=to {
             for offset in 0..thickness {
                 fill(canvas, width, height, mid_x + offset, y, color);
@@ -185,12 +189,7 @@ fn screen_grid(text: &str, rows: usize, cols: usize) -> (Vec<String>, Vec<Vec<St
     terminal.feed(normalized.as_str());
     let mut lines = Vec::with_capacity(rows);
     let mut grid = vec![vec![Style::default(); cols]; rows];
-    for (row, line) in terminal
-        .screen()
-        .visible_lines()
-        .take(rows)
-        .enumerate()
-    {
+    for (row, line) in terminal.screen().visible_lines().take(rows).enumerate() {
         let mut text = String::new();
         let mut col = 0;
         for cell in line.cells() {
@@ -309,8 +308,8 @@ pub fn screen_png(text: &str, cols: u16, rows: u16) -> Result<Vec<u8>> {
     let width = cols * cell_width + PADDING * 2;
     let height = rows * cell_height + PADDING * 2;
     let mut canvas = vec![0u8; width * height * 4];
-    for pixel in canvas.chunks_exact_mut(4) {
-        pixel.copy_from_slice(&[BACKGROUND, BACKGROUND, BACKGROUND, 0xff]);
+    for pixel in canvas.as_chunks_mut::<4>().0 {
+        *pixel = [BACKGROUND, BACKGROUND, BACKGROUND, 0xff];
     }
     let (lines, styles) = screen_grid(text, rows, cols);
     for (row, line) in styles.iter().enumerate() {
@@ -370,7 +369,8 @@ pub fn screen_png(text: &str, cols: u16, rows: u16) -> Result<Vec<u8>> {
             let slot = cells * cell_width;
             let left = PADDING as i32 + (col * cell_width) as i32 + metrics.xmin;
             let cell_top = PADDING as i32 + (row * cell_height) as i32;
-            let baseline = cell_top + ((cell_height as f32 + ascent + descent) / 2.0).round() as i32;
+            let baseline =
+                cell_top + ((cell_height as f32 + ascent + descent) / 2.0).round() as i32;
             let top = baseline - metrics.height as i32 - metrics.ymin;
             // Nearest neighbour: a coverage sample is either ink or hole, never
             // a blend, so glyphs stay crisp and pixel-exact at cell scale.
@@ -415,7 +415,11 @@ mod tests {
         let reader = png::Decoder::new(std::io::Cursor::new(&png_bytes));
         let reader = reader.read_info().expect("read info");
         let info = reader.info();
-        assert!(info.height > 4 * 15, "rows * cell + padding: {}", info.height);
+        assert!(
+            info.height > 4 * 15,
+            "rows * cell + padding: {}",
+            info.height
+        );
         assert!(info.width > 20 * 8, "cols * cell + padding: {}", info.width);
     }
 

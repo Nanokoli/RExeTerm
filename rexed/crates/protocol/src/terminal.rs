@@ -1,5 +1,4 @@
-//! Compatible terminal wire messages owned by RE; imported from pty-t protocol.
-//! Source: Yeamika/pty-t at 145981f2308b7ce8ddd41abc63407d2e3a9e8b24.
+//! Compatible terminal wire messages owned by RE.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

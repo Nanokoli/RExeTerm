@@ -21,6 +21,9 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::{watch, Mutex, Semaphore};
+/// One output pump per (task, channel) pair.
+type PumpKey = (String, String);
+type Pumps = Arc<Mutex<HashMap<PumpKey, Arc<AtomicBool>>>>;
 struct State {
     app: Arc<Application>,
     id: String,
@@ -29,7 +32,7 @@ struct State {
     stages: transfers::Transfers,
     cache: Mutex<HashMap<String, Cached>>,
     outputs: OutputStore,
-    pumps: Arc<Mutex<HashMap<(String, String), Arc<AtomicBool>>>>,
+    pumps: Pumps,
 }
 
 struct Cached {
@@ -151,7 +154,6 @@ impl State {
     /// Hold the task link: keep attaching in the background and record every chunk.
     async fn start_pump(&self, host: Option<&str>, value: &Value) {
         let (Some(host), Some(id)) = (host, value["metadata"]["asyncID"].as_str()) else {
-
             return;
         };
 
@@ -629,11 +631,13 @@ impl State {
                 let key = (host.to_string(), id.to_string());
 
                 if let Some(buffered) = self.read_output(&key, from_start, since).await {
-
                     return Ok(buffered);
                 }
-                self.start_pump(Some(host), &json!({"metadata":{"asyncID":id,"state":"running"}}))
-                    .await;
+                self.start_pump(
+                    Some(host),
+                    &json!({"metadata":{"asyncID":id,"state":"running"}}),
+                )
+                .await;
                 let value = app
                     .rpc(
                         Some(host),
@@ -643,13 +647,16 @@ impl State {
                     )
                     .await?;
                 self.record_output(Some(host), &value).await;
-                Ok(self.read_output(&key, from_start, since).await.unwrap_or_else(|| {
-                    json!({
-                        "metadata": {"asyncID": id, "host": host, "from": 0, "next_offset": 0,
-                                     "buffered_bytes": 0, "dropped_bytes": 0},
-                        "output": {"text": ""},
-                    })
-                }))
+                Ok(self
+                    .read_output(&key, from_start, since)
+                    .await
+                    .unwrap_or_else(|| {
+                        json!({
+                            "metadata": {"asyncID": id, "host": host, "from": 0, "next_offset": 0,
+                                         "buffered_bytes": 0, "dropped_bytes": 0},
+                            "output": {"text": ""},
+                        })
+                    }))
             }
             "tasks.stop" => {
                 let host = field("host")?;
@@ -744,9 +751,7 @@ impl State {
                 let preferences = app.core().preferences();
                 let settings = preferences.settings();
                 let stored = serde_json::to_value(&settings)?;
-                let layer = |name: &str, value: Option<serde_json::Value>| {
-                    json!({"layer": name, "shells": value.unwrap_or(Value::Null)})
-                };
+                let layer = |name: &str, value: Option<serde_json::Value>| json!({"layer": name, "shells": value.unwrap_or(Value::Null)});
                 // Fixed order: global, then executor, then the directory overlay.
                 Ok(json!({
                     "layers": [

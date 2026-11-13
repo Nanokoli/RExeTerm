@@ -10,9 +10,9 @@ pub mod stdio;
 #[cfg(feature = "ipc-client")]
 pub mod commands;
 #[cfg(feature = "ipc-client")]
-pub mod markdown;
-#[cfg(feature = "ipc-client")]
 pub mod executors;
+#[cfg(feature = "ipc-client")]
+pub mod markdown;
 #[cfg(feature = "ipc-client")]
 pub mod preferences;
 #[cfg(feature = "ipc-client")]

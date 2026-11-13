@@ -311,7 +311,10 @@ async fn run_restarts_a_stopped_host() {
     h.ok(cwd, &["service", "stop"]);
     assert!(h.registry().resolve(&id).unwrap().target.is_none());
     // No socket: the CLI starts the host role itself and then runs the command.
-    let out = h.ok(cwd, &["-e", "local", "-t", "2000", "-cmd", "echo auto-started"]);
+    let out = h.ok(
+        cwd,
+        &["-e", "local", "-t", "2000", "-cmd", "echo auto-started"],
+    );
     assert!(out.contains("auto-started"), "{out}");
     let second = h.registry().resolve(&id).unwrap();
     assert!(second.target.is_some());

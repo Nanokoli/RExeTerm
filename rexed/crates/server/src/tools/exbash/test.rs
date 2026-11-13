@@ -25,6 +25,8 @@ fn exbash_attach_read_timeout_prefers_read_timeout_and_caps_legacy_timeout() {
         description: None,
         timeout: None,
         read_timeout: None,
+        cols: None,
+        rows: None,
         async_id: Some("rex-test".to_string()),
         text: None,
         file_path: None,

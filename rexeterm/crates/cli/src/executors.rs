@@ -24,8 +24,8 @@ pub fn read(id: &str) -> Result<Option<Value>> {
     if !path.is_file() {
         return Ok(None);
     }
-    let text = fs::read_to_string(&path)
-        .with_context(|| format!("cannot read {}", path.display()))?;
+    let text =
+        fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
     Ok(Some(serde_json::from_str(&text).with_context(|| {
         format!("cannot parse {}", path.display())
     })?))
@@ -92,8 +92,7 @@ pub fn edit(id: &str, patch: Value) -> Result<Value> {
 pub fn remove(id: &str) -> Result<Value> {
     let path = path(id)?;
     if path.is_file() {
-        fs::remove_file(&path)
-            .with_context(|| format!("cannot remove {}", path.display()))?;
+        fs::remove_file(&path).with_context(|| format!("cannot remove {}", path.display()))?;
     }
     Ok(json!({"removed": id}))
 }

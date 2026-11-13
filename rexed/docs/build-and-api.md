@@ -3,7 +3,7 @@
 ## 范围
 
 RemoteExecutor 保留 RE SDK 和执行端。RexETerm 作为相邻独立工作区，承接应用实例、客户端偏好和入口。
-服务端仍为 rexed；REFS 独立项目已移除。线上工具、PTY、文件与会话协议保持原有标识。
+服务端为 rexed。线上工具、PTY、文件与会话协议保持原有标识。
 
 ## RE 构建
 
@@ -43,7 +43,7 @@ client.shutdown().await;
 ```
 
 需要客户端偏好的应用依赖相邻 RexETerm 的 appcore，详见其[构建指南](../../rexeterm/docs/build-and-api.md)。
-已有 PTY 迁入、shellCommand、统一文件协议和运维生命周期见各模块文档。独立 pty-t 已移除，终端能力由 RE 内部模块维护。
+已有 PTY 迁入、shellCommand、统一文件协议和运维生命周期见各模块文档，终端能力由 RE 内部模块维护。
 
 ## 原生 PTY API 迁移
 
