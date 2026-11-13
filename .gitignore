@@ -1,0 +1,15 @@
+/target/
+
+# Tauri 生成的目录不入库
+/rexeterm/app/src-tauri/gen/
+
+# 前端依赖与构建输出
+/rexeterm/app/frontend/node_modules/
+
+# 运行时状态
+.rexeterm-socket/
+.rexeterm-config/
+rexed-config/
+runs/
+
+*.pdb

@@ -26,7 +26,7 @@ bash scripts/build-windows.sh
 
 首次启动没有预置 Host。左侧 Host 页点击加号，填写名称、RE 地址和远端起始目录，
 保存后点击该 Host 连接。正式服务使用 tls 或 wss；Host 表单可指定 RE 用户名和本机私有认证配置文件路径，
-格式见 [RE 认证](../../../RemoteExecutor/docs/authentication.md)。
+格式见 [RE 认证](../../../rexed/docs/authentication.md)。
 可信开发链路还可使用 ws、tcp 和 unix，实际可用性依赖平台和链路配置。
 随后可浏览目录、搜索、预览文件，切换文件树并在下方查看属性。
 

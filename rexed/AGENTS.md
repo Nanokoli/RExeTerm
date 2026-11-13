@@ -10,6 +10,6 @@ selected_executor exposes target metadata for application request preparation. K
 No HTTP file bypass. No caller branding. REFS and the standalone pty-t project are retired; preserve the retained projects and Git index.
 
 Run scripts/check-boundaries.sh, cargo fmt, default and all-features strict workspace Clippy/tests and doctests before delivery.
-Tests for standalone rexed live in tests/standalone.rs; application integration tests moved to RexETerm/tests.
+Tests for standalone rexed live in tests/standalone.rs; application integration tests moved to rexeterm/tests.
 Read docs/module-boundaries.md and docs/build-and-api.md for state, lifecycle, build and migration details.
 Maintain Chinese docs under docs using docs/documentation-guide.md. Do not claim unimplemented authentication, SSH or GUI capabilities.

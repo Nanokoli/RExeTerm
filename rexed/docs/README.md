@@ -1,7 +1,7 @@
 # RemoteExecutor 文档
 
 RemoteExecutor 提供 RE 执行能力。`rexed` 承担执行，`rexe-client` 是承接 RE 能力的纯 SDK。
-应用实例管理、客户端偏好、MCP、CLI 与桌面程序位于独立 [RexETerm](../../RexETerm/README.md)。
+应用实例管理、客户端偏好、MCP、CLI 与桌面程序位于独立 [RexETerm](../../rexeterm/README.md)。
 
 ## 设计
 
@@ -34,4 +34,4 @@ RemoteExecutor 提供 RE 执行能力。`rexed` 承担执行，`rexe-client` 是
 
 - [工具接口](../crates/server/src/tools/README.md)
 - [文档规范](documentation-guide.md)
-- [RexETerm 偏好管理](../../RexETerm/docs/modules/preferences.md)
+- [RexETerm 偏好管理](../../rexeterm/docs/modules/preferences.md)

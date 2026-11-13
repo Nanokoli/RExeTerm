@@ -33,7 +33,7 @@ re_client 显式访问 SDK，会绕过偏好准备。克隆共享同一实例状
 ## 任务历史
 
 [history.rs](../../crates/appcore/src/history.rs) 观察远端终态并保存有界元数据历史，
-确认完成后消费短期回执。持久化、失败与重启行为见[生命周期](../../../RemoteExecutor/docs/lifecycle.md)。
+确认完成后消费短期回执。持久化、失败与重启行为见[生命周期](../../../rexed/docs/lifecycle.md)。
 GUI 和 REST 查询共用该历史，完成记录保留任务的标题和描述，不要求 rexed 保存完成任务。
 
 ## 接口与生命周期

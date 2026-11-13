@@ -13,7 +13,7 @@ RexETerm appcore 保存 shell 偏好，按执行器 ID 和目录选择有效配�
 
 输入与输出：本地 JSON → `ClientSettings`；选定 profile → 候选程序和已展开参数。
 
-实现位置：[schema.rs](../../crates/appcore/src/preferences/schema.rs)、[shell.rs](../../../RemoteExecutor/crates/protocol/src/shell.rs)。
+实现位置：[schema.rs](../../crates/appcore/src/preferences/schema.rs)、[shell.rs](../../../rexed/crates/protocol/src/shell.rs)。
 
 ### 配置分层
 
@@ -45,7 +45,7 @@ RexETerm appcore 保存 shell 偏好，按执行器 ID 和目录选择有效配�
 
 三个工具均在 AppCore 本地完成，返回 `scope: "client"`、执行器、目录、有效 profile、`settingsPath` 及 `settingsError`。执行器不再接收这些管理工具。
 
-实现位置：[tools.rs](../../crates/appcore/src/preferences/tools.rs)、[AppCore](../../../RemoteExecutor/crates/client/src/lib.rs)。
+实现位置：[tools.rs](../../crates/appcore/src/preferences/tools.rs)、[AppCore](../../../rexed/crates/client/src/lib.rs)。
 
 ### 命令规格准备
 
@@ -54,7 +54,7 @@ Client 展开 `{command}`，没有占位符时将命令追加到参数末尾，�
 Executor 按候选顺序，在最终工作目录或自己的 PATH 中解析程序，生成 `CommandSpec`。
 相对候选不会相对于客户端配置文件解释。
 
-实现位置：`ClientSettingsStore::shell_command`、[run.rs](../../../RemoteExecutor/crates/server/src/tools/exbash/run.rs)。
+实现位置：`ClientSettingsStore::shell_command`、[run.rs](../../../rexed/crates/server/src/tools/exbash/run.rs)。
 
 ### 执行器启动默认值
 
@@ -62,7 +62,7 @@ Executor 按候选顺序，在最终工作目录或自己的 PATH 中解析程�
 这些调用先从工作目录查找相对候选，再从启动配置目录查找；裸名称使用执行器 PATH。
 已移除工作目录配置扫描、目录缓存、配置写回和服务器 reload API。
 
-实现位置：[server store.rs](../../../RemoteExecutor/crates/server/src/settings/store.rs)、[shell.rs](../../../RemoteExecutor/crates/server/src/settings/shell.rs)。
+实现位置：[server store.rs](../../../rexed/crates/server/src/settings/store.rs)、[shell.rs](../../../rexed/crates/server/src/settings/shell.rs)。
 
 ## 配置示例
 
@@ -113,7 +113,7 @@ Rust 库默认使用独立内存 store；持久化需显式提供 `DaemonOptions
 
 ## 相关文档
 
-- [AppCore](../../../RemoteExecutor/docs/modules/client.md)
-- [Executor](../../../RemoteExecutor/docs/modules/executor.md)
-- [构建与 API 迁移](../../../RemoteExecutor/docs/build-and-api.md)
-- [文档索引](../../../RemoteExecutor/docs/README.md)
+- [AppCore](../../../rexed/docs/modules/client.md)
+- [Executor](../../../rexed/docs/modules/executor.md)
+- [构建与 API 迁移](../../../rexed/docs/build-and-api.md)
+- [文档索引](../../../rexed/docs/README.md)

@@ -31,5 +31,5 @@ RexETerm appcore 保存客户端偏好、准备调用，并由 MCP、CLI、完�
 
 - [模块边界](module-boundaries.md)
 - [客户端 SDK](modules/client.md)
-- [RexETerm 设计](../../RexETerm/docs/design.md)
+- [RexETerm 设计](../../rexeterm/docs/design.md)
 - [文档索引](README.md)

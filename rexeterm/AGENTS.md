@@ -12,7 +12,7 @@ App HTTP sessions share App state but retain independent protocol IDs, versions,
 HTTP stop/DELETE must preserve App connections, preferences and forwards; AppHost shutdown finally closes them.
 AppHost serializes HTTP toggles and final shutdown. Root mcp binary is stdio-only, with no HTTP flags or default HTTP dependency.
 Application owns saved hosts, bounded PTY preview and file jobs; reuse the shared core and SDK streams. AppCore owns bounded task outcome history; RE only keeps short final receipts.
-Keep local execution optional in daemon, SDK RE capabilities in sibling RemoteExecutor, shell preferences in AppCore.
+Keep local execution optional in daemon, SDK RE capabilities in sibling rexed, shell preferences in AppCore.
 Do not duplicate router/session/preference state. Preserve stdout framing, limits, Origin validation and explicit shutdown.
-Run boundaries, fmt, default/all-feature strict workspace Clippy/tests and doctests. Chinese docs follow ../RemoteExecutor/docs/documentation-guide.md.
+Run boundaries, fmt, default/all-feature strict workspace Clippy/tests and doctests. Chinese docs follow ../rexed/docs/documentation-guide.md.
 Preserve prior work and Git index. REFS and the standalone pty-t project are retired. Never claim unimplemented GUI, auth or SSH capabilities.

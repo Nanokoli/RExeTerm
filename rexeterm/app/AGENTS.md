@@ -6,4 +6,4 @@ MCP HTTP is compiled optionally and starts disabled. UI calls enable/disable and
 HTTP uses the same AppCore as the UI, and closing HTTP preserves business state. Final exit awaits AppHost::shutdown.
 Daemon is an internal host module. Ordinary HTTP/Unix IPC host is separate from MCP HTTP. Do not claim Windows named pipes, service installation or full operations GUI exists.
 Keep independent ManagementClient and business targets; use raw SDK terminal streams, no MCP subprocess for GUI operations.
-Follow ../../RemoteExecutor/docs/documentation-guide.md and parent AGENTS.md. Compile on the Linux Builder, including Windows cross builds; Windows machines only run tests and debugging. Run frontend checks and real RE/PTY/transfer/forward UI checks for desktop changes.
+Follow ../../rexed/docs/documentation-guide.md and parent AGENTS.md. Compile on the Linux Builder, including Windows cross builds; Windows machines only run tests and debugging. Run frontend checks and real RE/PTY/transfer/forward UI checks for desktop changes.

@@ -82,4 +82,4 @@ cargo test --locked --workspace --all-targets --all-features
 - [桌面运行指南](../app/docs/getting-started.md)
 - [App 后端](../app/docs/modules/backend.md)
 - [文档索引](README.md)
-- [RE 构建](../../RemoteExecutor/docs/build-and-api.md)
+- [RE 构建](../../rexed/docs/build-and-api.md)

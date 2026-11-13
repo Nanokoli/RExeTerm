@@ -42,5 +42,5 @@ RexETerm AppCore 按 Host 别名保存任务最终元数据，活动任务最多
 
 - [Exbash](modules/exbash.md)
 - [认证与配置](authentication.md)
-- [RexETerm 状态核心](../../RexETerm/docs/modules/appcore.md)
+- [RexETerm 状态核心](../../rexeterm/docs/modules/appcore.md)
 - [文档索引](README.md)

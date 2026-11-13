@@ -174,8 +174,8 @@ Windows 命名管道可注入适配器，目前没有内置监听器。
 - [传输测试](../../crates/transport/src/test.rs)：分帧、分片、取消、非法输入、关闭、WS 控制消息。
 - [通道测试](../../crates/transport/src/pool_test.rs)：用途隔离、取消释放容量、租约唤醒。
 - [KCP 测试](../../crates/transport/src/kcp_test.rs)：回环代理每 13 个 UDP 包丢弃 1 个，双向各 128 KiB 内容完整性。
-- [传输集成](../../../RexETerm/tests/transports.rs)：WS / TCP / Unix / 自定义流共用工具和终端处理。
-- [转发集成](../../../RexETerm/tests/forwarding.rs)：多链路、TCP / WS / KCP 并发转发、半关闭及停止清理。
+- [传输集成](../../../rexeterm/tests/transports.rs)：WS / TCP / Unix / 自定义流共用工具和终端处理。
+- [转发集成](../../../rexeterm/tests/forwarding.rs)：多链路、TCP / WS / KCP 并发转发、半关闭及停止清理。
 
 ## 链路 I/O 计数
 

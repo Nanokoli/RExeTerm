@@ -128,7 +128,7 @@ RE 文件字节始终走统一文件通道，不额外开启文件 HTTP 服务�
 
 - [HTTP 与宿主接口](http-api.md)
 - [CLI 模块](modules/cli.md)
-- [Exbash 服务端](../../RemoteExecutor/docs/modules/exbash.md)
+- [Exbash 服务端](../../rexed/docs/modules/exbash.md)
 
 ## 当前目录禁用
 

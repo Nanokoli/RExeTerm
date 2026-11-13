@@ -50,7 +50,7 @@ Tauri command 连接 WebView 与进程内 Desktop；CLI 通过同一二进制的
 桌面包含 Host、文件树与属性、中心文件/任务 PTY 预览，以及任务、传输和转发三个底栏。
 
 普通 HTTP 宿主和 GUI 复用 `crates/application` 的工作区与应用服务。
-任务历史由 AppCore 保存，完成任务的原生 PTY 在 RE 释放，见[生命周期说明](../../RemoteExecutor/docs/lifecycle.md)。
+任务历史由 AppCore 保存，完成任务的原生 PTY 在 RE 释放，见[生命周期说明](../../rexed/docs/lifecycle.md)。
 
 ## 相关文档
 

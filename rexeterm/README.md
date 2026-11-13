@@ -1,7 +1,7 @@
 # RexETerm
 
 RexETerm 提供完整 App、普通 MCP stdio、普通 HTTP 宿主，以及连接宿主的 CLI。
-两者共用状态核心 appcore 和后台宿主 daemon；底层 [rexe-client](../RemoteExecutor/docs/modules/client.md) 承接 RE 能力。
+两者共用状态核心 appcore 和后台宿主 daemon；底层 [rexe-client](../rexed/docs/modules/client.md) 承接 RE 能力。
 
 ## 产品形态
 

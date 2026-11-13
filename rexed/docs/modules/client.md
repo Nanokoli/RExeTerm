@@ -3,7 +3,7 @@
 ## 范围
 
 `rexe-client` 是 RE 的客户端 SDK，位于 crates/client。它承接执行端的能力，应用实例和偏好由
-[RexETerm appcore](../../../RexETerm/docs/modules/appcore.md) 管理。
+[RexETerm appcore](../../../rexeterm/docs/modules/appcore.md) 管理。
 SDK 不加载客户端偏好，不处理 list_shells / set_default_shell / request_reload，不定义 MCP 或 CLI 入口。
 
 ## 内部结构
@@ -48,4 +48,4 @@ SDK 依赖 protocol、transport 与 data，不依赖服务端、PTY 创建、Rex
 
 - [文档索引](../README.md)
 - [构建与迁移](../build-and-api.md)
-- [RexETerm](../../../RexETerm/README.md)
+- [RexETerm](../../../rexeterm/README.md)

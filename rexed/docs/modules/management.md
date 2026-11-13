@@ -15,8 +15,8 @@
 | [server/registry.rs](../../crates/server/src/registry.rs) | 会话租约、链路统计归属和活动通道登记 | 最多 1024 个活动会话及通道记录 |
 | [server/management.rs](../../crates/server/src/management.rs) | 独立监听、协议校验和快照组合 | 监听任务、最多 128 条管理连接及 socket 清理信息 |
 | [client/management.rs](../../crates/client/src/management.rs) | 纯管理客户端 | 一条独立管理 Link 和请求序号 |
-| [admin_view.rs](../../../RexETerm/crates/cli/src/admin_view.rs) | 五页过滤、归属与速率呈现 | 只消费快照 |
-| [rexctl.rs](../../../RexETerm/src/bin/rexctl.rs)、[ui.rs](../../../RexETerm/src/bin/rexctl/ui.rs) | CLI、轮询、分页导航与终端恢复 | 当前页、滚动位置与最新快照 |
+| [admin_view.rs](../../../rexeterm/crates/cli/src/admin_view.rs) | 五页过滤、归属与速率呈现 | 只消费快照 |
+| [rexctl.rs](../../../rexeterm/src/bin/rexctl.rs)、[ui.rs](../../../rexeterm/src/bin/rexctl/ui.rs) | CLI、轮询、分页导航与终端恢复 | 当前页、滚动位置与最新快照 |
 | [server/events.rs](../../crates/server/src/events.rs) | 事件身份关联、计数、stdout 和文件审计 | 有界会话缓存、文件队列和 writer |
 
 ### RE 用户与客户端
@@ -216,8 +216,8 @@ TCP/TLS/WS/WSS 业务与网络管理监听会在 accept 错误后按原地址和
 ## 验证
 
 [归属与超时测试](../../tests/ownership.rs) 验证同名用户列表和控制隔离、跨用户 ID 拒绝、恢复凭据、
-持续连接撤销、任务终止和三类通道回收；[客户端恢复测试](../../../RexETerm/tests/ownership.rs)
-验证私有凭据持久化及 MCP 标题透传。[管理集成测试](../../../RexETerm/tests/management.rs) 覆盖同名用户的多客户端、短查询、会话绑定校验、
+持续连接撤销、任务终止和三类通道回收；[客户端恢复测试](../../../rexeterm/tests/ownership.rs)
+验证私有凭据持久化及 MCP 标题透传。[管理集成测试](../../../rexeterm/tests/management.rs) 覆盖同名用户的多客户端、短查询、会话绑定校验、
 文件和转发归属、创建者保留、PTY 主控切换、独立 WS 路径、Unix 权限与清理、
 实际 `rexctl`；[执行端进程测试](../../tests/standalone.rs) 覆盖 rexed 和服务端 stdout 事件。
 [链路计数测试](../../crates/transport/src/traffic.rs) 校验封装字节、WS 握手与自动 Pong、

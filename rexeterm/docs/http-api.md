@@ -23,7 +23,7 @@ Unix socket 权限为 0600，已占用路径不会由通用适配器自动删除
 
 TCP 每次请求要求 `Authorization: Bearer <token>`，token 32..256 个 ASCII 字母数字、`-` 或 `_`。
 token 不放进 URL。宿主直接监听 HTTP，跨机部署可由 HTTPS 反向代理保护；
-RE 连接的 TLS 配置独立，见 [RE 认证](../../RemoteExecutor/docs/authentication.md)。
+RE 连接的 TLS 配置独立，见 [RE 认证](../../rexed/docs/authentication.md)。
 浏览器 Origin 必须精确匹配本监听地址或 `HttpOptions.allowed_origins`。
 `POST /session` 可设置 HttpOnly、SameSite=Strict cookie；cookie 认证始终要求有效 Origin。
 普通 API 当前不提供跨 Origin 的 CORS 预检，浏览器宜使用同源代理。

@@ -92,9 +92,9 @@ stop 通过本地 `forwardID` 定位，关闭监听器并取消该项的活动�
 
 ## 验证
 
-[forwarding.rs](../../../RexETerm/tests/forwarding.rs) 覆盖 TCP / WS / 可选 KCP 的 8 个并发会话、各 256 KiB 二进制往返、EOF 后响应、停止释放两端和 Client 析构清理。
+[forwarding.rs](../../../rexeterm/tests/forwarding.rs) 覆盖 TCP / WS / 可选 KCP 的 8 个并发会话、各 256 KiB 二进制往返、EOF 后响应、停止释放两端和 Client 析构清理。
 同文件验证多链路节点核对、Query 分布、模拟设备目标和不支持的 UDP 目标。
-[MCP 测试](../../../RexETerm/tests/mcp_test.rs) 与 [stdio 测试](../../../RexETerm/tests/stdio_test.rs) 验证两种入口。
+[MCP 测试](../../../rexeterm/tests/mcp_test.rs) 与 [stdio 测试](../../../rexeterm/tests/stdio_test.rs) 验证两种入口。
 设备覆盖使用内存双向流，尚未测试真实串口或物理硬件。
 
 ## 相关文档

@@ -50,7 +50,7 @@ UUID64 保留至系统重启；CLI 退出或 daemon 停止/重启不使其失效
 
 ## 目录禁用标记
 
-[directory.rs](../../crates/cli/src/directory.rs) 在任何配置、注册表或启动操作之前检查 cwd 的
+[directory.rs](../../crates/cli-host/src/directory.rs) 在任何配置、注册表或启动操作之前检查 cwd 的
 `.rexeterm.disable`。`enable`、`disable` 和帮助可在禁用状态使用。
 标记也阻止从该 cwd 启动 daemon，不会停止已经运行的宿主。
 

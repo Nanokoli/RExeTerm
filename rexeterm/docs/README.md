@@ -21,6 +21,6 @@
 - [应用前端](../app/docs/modules/frontend.md)
 - [应用文档入口](../app/docs/README.md)
 - [项目入口](../README.md)
-- [文档规范](../../RemoteExecutor/docs/documentation-guide.md)
+- [文档规范](../../rexed/docs/documentation-guide.md)
 
 - [CLI 原生 IPC 与单一二进制](cli-ipc.md)

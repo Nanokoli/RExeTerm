@@ -29,7 +29,7 @@ cargo build -p remote_executor --no-default-features --features server,kcp --bin
 | rexe-client JSONL 程序 | RexETerm 的可选 stdio 库；新 rexeterm-cli 连接 HTTP/IPC 宿主 |
 | rexe-client-mcp | RexETerm 的 rexeterm-mcp，仅 stdio；HTTP 由 AppHost 可选开启 |
 | rexctl | 移到 RexETerm CLI 适配器，程序名保留 |
-| RexETermApp 目录 | RexETerm/app，Windows Tauri 工作区预览与 App 后台已实现 |
+| RexETermApp 目录 | rexeterm/app，Windows Tauri 工作区预览与 App 后台已实现 |
 
 Daemon::core 返回 AppCore。AppCore::re_client 显式访问底层 SDK，绕过偏好准备。
 不保留旧应用导出别名；下游升级时迁移依赖和入口。正式 rexed 默认启用 TLS 与用户认证，连接配置见[认证指南](authentication.md)。
@@ -42,7 +42,7 @@ let client = Client::new().await?;
 client.shutdown().await;
 ```
 
-需要客户端偏好的应用依赖相邻 RexETerm 的 appcore，详见其[构建指南](../../RexETerm/docs/build-and-api.md)。
+需要客户端偏好的应用依赖相邻 RexETerm 的 appcore，详见其[构建指南](../../rexeterm/docs/build-and-api.md)。
 已有 PTY 迁入、shellCommand、统一文件协议和运维生命周期见各模块文档。独立 pty-t 已移除，终端能力由 RE 内部模块维护。
 
 ## 原生 PTY API 迁移
@@ -91,4 +91,4 @@ cargo test --locked --workspace --all-targets --all-features
 ## 相关文档
 
 - [文档索引](README.md)
-- [RexETerm](../../RexETerm/README.md)
+- [RexETerm](../../rexeterm/README.md)

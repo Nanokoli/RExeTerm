@@ -110,11 +110,11 @@ SHA-256 提供传输完整性检查；链路认证、加密和身份绑定仍由
 
 ## 验证
 
-- [file_transfer.rs](../../../RexETerm/tests/file_transfer.rs)：WS / TCP / Unix / KCP / 注入设备流，17 MiB 文件、空文件、下载偏移、File 用途选择、进度与查询并发。
+- [file_transfer.rs](../../../rexeterm/tests/file_transfer.rs)：WS / TCP / Unix / KCP / 注入设备流，17 MiB 文件、空文件、下载偏移、File 用途选择、进度与查询并发。
 - 同文件验证取消、截断、错误散列、覆盖拒绝及原文件保留；直接 HTTP GET / PUT 不再读写文件。
-- [module_boundaries.rs](../../../RexETerm/tests/module_boundaries.rs)：上传与工具写入共锁，查询仍可执行。
-- [remote_only.rs](../../../RexETerm/tests/remote_only.rs)：旧 HTTP 能力节点明确报升级错误。
-- [MCP 测试](../../../RexETerm/tests/mcp_test.rs) 与 [stdio 测试](../../../RexETerm/tests/file_transfer.rs)：返回成功前实际文件已完成。
+- [module_boundaries.rs](../../../rexeterm/tests/module_boundaries.rs)：上传与工具写入共锁，查询仍可执行。
+- [remote_only.rs](../../../rexeterm/tests/remote_only.rs)：旧 HTTP 能力节点明确报升级错误。
+- [MCP 测试](../../../rexeterm/tests/mcp_test.rs) 与 [stdio 测试](../../../rexeterm/tests/file_transfer.rs)：返回成功前实际文件已完成。
 - [staged_file.rs](../../crates/data/src/staged_file.rs)：禁止覆盖时保留并发创建的目标。
 
 ## 相关文档

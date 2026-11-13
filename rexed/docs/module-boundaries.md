@@ -18,7 +18,7 @@
 | RexETerm app | AppHost、Desktop 命令、Windows Tauri 工作区与 HTTP 开关 | daemon、appcore、可选 HTTP 适配器 |
 
 依赖方向为 RexETerm -> rexe-client -> RE 基础 crate。RE 不依赖 RexETerm。
-偏好管理与 shell 调用准备位于 RexETerm/crates/appcore/src/preferences 和 appcore::handle，SDK 只传递已准备的请求。
+偏好管理与 shell 调用准备位于 rexeterm/crates/appcore/src/preferences 和 appcore::handle，SDK 只传递已准备的请求。
 
 ## 状态与生命周期
 
