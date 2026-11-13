@@ -1,0 +1,23 @@
+[package]
+name = "rexeterm-app"
+version = "0.2.13"
+edition = "2021"
+
+[features]
+default = ["mcp-http"]
+mcp-http = ["dep:rexeterm-mcp-http-adapt"]
+local = ["rexeterm-daemon/local"]
+kcp = ["rexeterm-daemon/kcp"]
+
+[dependencies]
+rexeterm-application = { path = "../../crates/application" }
+rexeterm-appcore = { path = "../../crates/appcore" }
+rexeterm-daemon = { path = "../../crates/daemon" }
+rexeterm-mcp-http-adapt = { path = "../../crates/mcp-http-adapt", optional = true }
+anyhow = "1"
+tokio = { version = "1", features = ["sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+regex = "1"
+url = "2"

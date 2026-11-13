@@ -1,0 +1,127 @@
+[package]
+name = "rexeterm"
+version = "0.2.13"
+edition = "2021"
+description = "RexETerm application core, MCP and CLI composition"
+
+[features]
+default = ["stdio", "mcp-stdio", "local", "admin"]
+client = []
+server = ["dep:remote_executor_server"]
+local = ["server", "rexeterm-daemon/local", "rexeterm-app?/local"]
+stdio = ["dep:rexeterm-cli", "rexeterm-cli/stdio"]
+admin = ["dep:rexeterm-cli", "rexeterm-cli/admin", "dep:crossterm", "dep:unicode-width"]
+mcp-stdio = ["dep:rexeterm-mcp-stdio-adapt"]
+app = ["dep:rexeterm-app"]
+http = ["dep:rexeterm-http-adapt"]
+mcp-http = [ "app", "rexeterm-app/mcp-http", "dep:rexeterm-mcp-http-adapt"]
+kcp = ["rexe-client/kcp", "rexeterm-daemon/kcp", "rexeterm-app?/kcp", "remote_executor_server?/kcp"]
+
+[[bin]]
+name = "rexeterm-mcp"
+path = "src/bin/mcp.rs"
+required-features = ["mcp-stdio"]
+[[bin]]
+name = "rexctl"
+path = "src/bin/rexctl.rs"
+required-features = ["admin"]
+
+[dependencies]
+rexeterm-http-adapt = { path = "crates/http-adapt", optional = true }
+rexe-client = { path = "../rexed/crates/client" }
+rexeterm-appcore = { path = "crates/appcore" }
+rexeterm-daemon = { path = "crates/daemon" }
+rexeterm-mcp-stdio-adapt = { path = "crates/mcp-stdio-adapt", optional = true }
+rexeterm-mcp-http-adapt = { path = "crates/mcp-http-adapt", optional = true }
+rexeterm-app = { path = "app/backend", optional = true, default-features = false }
+rexeterm-cli = { path = "crates/cli", optional = true, default-features = false }
+remote_executor_protocol = { path = "../rexed/crates/protocol" }
+remote_executor_server = { path = "../rexed/crates/server", optional = true }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+crossterm = { version = "0.29", optional = true }
+unicode-width = { version = "0.2", optional = true }
+
+[dev-dependencies]
+reqwest = {version="0.12",default-features=false,features=["json","stream"]}
+futures-util = "0.3"
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.29"
+
+[[test]]
+name = "client"
+path = "tests/client.rs"
+required-features = ["local"]
+
+[[test]]
+name = "mcp_test"
+path = "tests/mcp_test.rs"
+required-features = ["local", "mcp-stdio"]
+
+[[test]]
+name = "stdio_test"
+path = "tests/stdio_test.rs"
+required-features = ["local", "stdio"]
+
+[[test]]
+name = "module_boundaries"
+path = "tests/module_boundaries.rs"
+required-features = ["local"]
+
+[[test]]
+name = "optional_local"
+path = "tests/optional_local.rs"
+required-features = ["local", "stdio", "mcp-stdio"]
+
+[[test]]
+name = "remote_only"
+path = "tests/remote_only.rs"
+required-features = ["stdio", "mcp-stdio"]
+
+[[test]]
+name = "client_settings"
+path = "tests/client_settings.rs"
+required-features = ["local"]
+
+[[test]]
+name = "transports"
+path = "tests/transports.rs"
+required-features = ["local"]
+
+[[test]]
+name = "forwarding"
+path = "tests/forwarding.rs"
+required-features = ["local"]
+
+[[test]]
+name = "management"
+path = "tests/management.rs"
+required-features = ["local", "admin"]
+
+[[test]]
+name = "file_transfer"
+path = "tests/file_transfer.rs"
+required-features = ["local"]
+
+[[test]]
+name = "mcp_http"
+path = "tests/mcp_http.rs"
+required-features = ["mcp-http", "server"]
+
+[[test]]
+name = "app_host"
+path = "tests/app_host.rs"
+required-features = ["mcp-http", "server"]
+
+[[test]]
+name = "desktop"
+path = "tests/desktop.rs"
+required-features = ["mcp-http", "server"]
+
+[[test]]
+name = "http_api"
+path = "tests/http_api.rs"
+required-features = ["http", "server"]

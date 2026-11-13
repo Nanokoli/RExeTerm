@@ -1,0 +1,23 @@
+{
+  "productName": "RexETerm",
+  "version": "0.2.13",
+  "identifier": "dev.rexeterm.app",
+  "build": { "frontendDist": "../frontend" },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [{
+      "label": "main",
+      "title": "RexETerm — 工作区",
+      "width": 1440,
+      "height": 960,
+      "minWidth": 1040,
+      "minHeight": 720,
+      "center": true,
+      "backgroundColor": "#101319"
+    }],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": { "active": false }
+}

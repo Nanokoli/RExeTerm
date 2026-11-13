@@ -1,0 +1,10 @@
+[package]
+name = "rexeterm-adapter-common"
+version = "0.2.13"
+edition = "2021"
+
+[features]
+default = []
+
+[dependencies]
+tokio = { version = "1", features = ["io-util", "macros", "rt"] }

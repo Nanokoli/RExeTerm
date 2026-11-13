@@ -1,0 +1,55 @@
+[package]
+name = "remote_executor"
+version = "0.2.13"
+edition = "2021"
+description = "RE protocol, capability client and executor server"
+
+[features]
+default = ["server"]
+client = ["dep:rexe-client"]
+server = ["dep:remote_executor_server", "dep:anyhow", "dep:clap", "dep:tokio"]
+kcp = ["rexe-client?/kcp", "remote_executor_server?/kcp"]
+
+[[bin]]
+name = "rexed"
+path = "src/bin/executor.rs"
+required-features = ["server"]
+
+[dependencies]
+remote_executor_protocol = { path = "crates/protocol" }
+rexe-client = { path = "crates/client", optional = true }
+remote_executor_server = { path = "crates/server", optional = true }
+anyhow = { version = "1", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"], optional = true }
+
+[dev-dependencies]
+rcgen = "0.13"
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
+
+[[test]]
+name = "standalone"
+path = "tests/standalone.rs"
+required-features = ["server", "client"]
+
+[[test]]
+name = "ownership"
+path = "tests/ownership.rs"
+required-features = ["server", "client"]
+
+[[test]]
+name = "pty_viewers"
+path = "tests/pty_viewers.rs"
+required-features = ["server", "client"]
+
+[[test]]
+name = "authentication"
+path = "tests/authentication.rs"
+required-features = ["server", "client"]
+
+[[test]]
+name = "lifecycle"
+path = "tests/lifecycle.rs"
+required-features = ["server", "client"]

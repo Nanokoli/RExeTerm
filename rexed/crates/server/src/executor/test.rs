@@ -1,0 +1,395 @@
+use crate::protocol::management::{ClientHello, SessionCredential, SessionMessage};
+use crate::protocol::terminal::{AdminText, ClientText, ServerText};
+use crate::{start_shared_executor_ws, Executor, ExecutorRequest, ExecutorResponse, ShellManager};
+use futures_util::{SinkExt, StreamExt};
+use serde_json::json;
+use std::fs;
+use tempfile::tempdir;
+use tokio::time::{timeout, Duration};
+use tokio_tungstenite::tungstenite::Message;
+
+#[tokio::test]
+async fn shared_endpoint_accepts_tool_and_pty_protocols() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("file.txt"), "shared endpoint\n").unwrap();
+
+    let manager = ShellManager::default_shell(80, 24);
+    manager.create_bash("main").unwrap();
+    let addr = start_shared_executor_ws("127.0.0.1:0", Executor::local("shared"), manager).unwrap();
+    let url = format!("ws://{addr}");
+    let credential = open_session(&url).await;
+
+    let (mut tool_ws, _) = bound_ws(&url, &credential).await;
+    let tool_request = ExecutorRequest {
+        id: json!(1),
+        method: "read".to_string(),
+        params: json!({"filePath":"file.txt"}),
+        directory: Some(dir.path().to_path_buf()),
+        executor: None,
+        tool_timeout_ms: None,
+    };
+    tool_ws
+        .send(Message::Text(
+            serde_json::to_string(&tool_request).unwrap().into(),
+        ))
+        .await
+        .unwrap();
+    let Message::Text(tool_response) = tool_ws.next().await.unwrap().unwrap() else {
+        panic!("expected text tool response");
+    };
+    let tool_response: ExecutorResponse = serde_json::from_str(&tool_response).unwrap();
+    assert!(tool_response.ok);
+    assert_eq!(tool_response.executor.as_deref(), Some("shared"));
+
+    let (mut pty_ws, _) = bound_ws(&url, &credential).await;
+    pty_ws
+        .send(Message::Text(
+            serde_json::to_string(&AdminText::List).unwrap().into(),
+        ))
+        .await
+        .unwrap();
+    let Message::Text(pty_response) = pty_ws.next().await.unwrap().unwrap() else {
+        panic!("expected text pty response");
+    };
+    let pty_response: ServerText = serde_json::from_str(&pty_response).unwrap();
+    let ServerText::Sessions { sessions } = pty_response else {
+        panic!("expected pty sessions response");
+    };
+    assert!(
+        sessions.is_empty(),
+        "unowned startup PTYs are only visible in operations"
+    );
+}
+
+#[tokio::test]
+async fn shared_endpoint_exbash_sessions_are_visible_to_pty_clients() {
+    let manager = ShellManager::default_shell(80, 24);
+    manager.create_bash("main").unwrap();
+    let addr =
+        start_shared_executor_ws("127.0.0.1:0", Executor::local("shared-exbash"), manager).unwrap();
+    let url = format!("ws://{addr}");
+    let credential = open_session(&url).await;
+    let command = if cfg!(windows) {
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command 'Write-Output visible; Start-Sleep -Seconds 1'"
+    } else {
+        "bash -lc 'printf visible; sleep 1'"
+    };
+
+    let (mut tool_ws, _) = bound_ws(&url, &credential).await;
+    let request = ExecutorRequest {
+        id: json!(10),
+        method: "exbash".to_string(),
+        params: json!({"mode":"run",
+            "command": command,
+            "description":"visible pty exbash",
+            "read_timeout":0
+        }),
+        directory: None,
+        executor: None,
+        tool_timeout_ms: None,
+    };
+    tool_ws
+        .send(Message::Text(
+            serde_json::to_string(&request).unwrap().into(),
+        ))
+        .await
+        .unwrap();
+    let Message::Text(response) = tool_ws.next().await.unwrap().unwrap() else {
+        panic!("expected text tool response");
+    };
+    let response: ExecutorResponse = serde_json::from_str(&response).unwrap();
+    assert!(response.ok, "{:?}", response.error);
+    let async_id = response.result.unwrap()["metadata"]["asyncID"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (mut pty_ws, _) = bound_ws(&url, &credential).await;
+    pty_ws
+        .send(Message::Text(
+            serde_json::to_string(&AdminText::List).unwrap().into(),
+        ))
+        .await
+        .unwrap();
+    let Message::Text(pty_response) = pty_ws.next().await.unwrap().unwrap() else {
+        panic!("expected text pty response");
+    };
+    let pty_response: ServerText = serde_json::from_str(&pty_response).unwrap();
+    let ServerText::Sessions { sessions } = pty_response else {
+        panic!("expected pty sessions response");
+    };
+    assert!(sessions.iter().any(|session| session.pty == async_id));
+
+    let stop = ExecutorRequest {
+        id: json!(11),
+        method: "exbash".to_string(),
+        params: json!({"mode":"stop","asyncID":async_id.clone()}),
+        directory: None,
+        executor: None,
+        tool_timeout_ms: None,
+    };
+    tool_ws
+        .send(Message::Text(serde_json::to_string(&stop).unwrap().into()))
+        .await
+        .unwrap();
+    let _ = tool_ws.next().await.unwrap().unwrap();
+
+    let remove = ExecutorRequest {
+        id: json!(12),
+        method: "exbash".to_string(),
+        params: json!({"mode":"remove","asyncID":async_id}),
+        directory: None,
+        executor: None,
+        tool_timeout_ms: None,
+    };
+    tool_ws
+        .send(Message::Text(
+            serde_json::to_string(&remove).unwrap().into(),
+        ))
+        .await
+        .unwrap();
+    let _ = tool_ws.next().await.unwrap().unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shared_endpoint_meta_reports_pty_exit_code() {
+    let manager = ShellManager::default_shell(80, 24);
+    let addr = start_shared_executor_ws(
+        "127.0.0.1:0",
+        Executor::local("shared-exit-status"),
+        manager,
+    )
+    .unwrap();
+    let url = format!("ws://{addr}");
+    let credential = open_session(&url).await;
+
+    let (mut tool_ws, _) = bound_ws(&url, &credential).await;
+    let request = ExecutorRequest {
+        id: json!(20),
+        method: "exbash".to_string(),
+        params: json!({"mode":"run",
+            "command":"bash -lc 'sleep 0.1; exit 7'",
+            "read_timeout":0
+        }),
+        directory: None,
+        executor: None,
+        tool_timeout_ms: None,
+    };
+    tool_ws
+        .send(Message::Text(
+            serde_json::to_string(&request).unwrap().into(),
+        ))
+        .await
+        .unwrap();
+    let Message::Text(response) = tool_ws.next().await.unwrap().unwrap() else {
+        panic!("expected text tool response");
+    };
+    let response: ExecutorResponse = serde_json::from_str(&response).unwrap();
+    assert!(response.ok, "{:?}", response.error);
+    let async_id = response.result.unwrap()["metadata"]["asyncID"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (mut pty_ws, _) = bound_ws(&url, &credential).await;
+    pty_ws
+        .send(Message::Text(
+            serde_json::to_string(&ClientText::Hello {
+                id: "ptyt".to_string(),
+                pty: async_id.clone(),
+                cols: 80,
+                rows: 24,
+            })
+            .unwrap()
+            .into(),
+        ))
+        .await
+        .unwrap();
+
+    let exit_code = timeout(Duration::from_secs(2), async {
+        loop {
+            let message = pty_ws.next().await?;
+            let Ok(Message::Text(text)) = message else {
+                continue;
+            };
+            let Ok(ServerText::Meta { exit_code, .. }) = serde_json::from_str(&text) else {
+                continue;
+            };
+            if exit_code.is_some() {
+                return exit_code;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(exit_code, Some(7));
+
+    let (mut admin_ws, _) = bound_ws(&url, &credential).await;
+    admin_ws
+        .send(Message::Text(
+            serde_json::to_string(&AdminText::List).unwrap().into(),
+        ))
+        .await
+        .unwrap();
+    let Message::Text(pty_response) = admin_ws.next().await.unwrap().unwrap() else {
+        panic!("expected text pty response");
+    };
+    let ServerText::Sessions { sessions } = serde_json::from_str(&pty_response).unwrap() else {
+        panic!("expected pty sessions response");
+    };
+    assert!(!sessions.iter().any(|session| session.pty == async_id));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn exbash_mode_remove_closes_connected_pty_client() {
+    let manager = ShellManager::default_shell(80, 24);
+    let addr = start_shared_executor_ws(
+        "127.0.0.1:0",
+        Executor::local("shared-remove-close"),
+        manager,
+    )
+    .unwrap();
+    let url = format!("ws://{addr}");
+    let credential = open_session(&url).await;
+
+    let (mut tool_ws, _) = bound_ws(&url, &credential).await;
+    let request = ExecutorRequest {
+        id: json!(30),
+        method: "exbash".to_string(),
+        params: json!({"mode":"run",
+            "command":"bash -lc 'printf done; sleep 5'",
+            "read_timeout":0
+        }),
+        directory: None,
+        executor: None,
+        tool_timeout_ms: None,
+    };
+    tool_ws
+        .send(Message::Text(
+            serde_json::to_string(&request).unwrap().into(),
+        ))
+        .await
+        .unwrap();
+    let Message::Text(response) = tool_ws.next().await.unwrap().unwrap() else {
+        panic!("expected text tool response");
+    };
+    let response: ExecutorResponse = serde_json::from_str(&response).unwrap();
+    assert!(response.ok, "{:?}", response.error);
+    let async_id = response.result.unwrap()["metadata"]["asyncID"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (mut pty_ws, _) = bound_ws(&url, &credential).await;
+    pty_ws
+        .send(Message::Text(
+            serde_json::to_string(&ClientText::Hello {
+                id: "ptyt".to_string(),
+                pty: async_id.clone(),
+                cols: 80,
+                rows: 24,
+            })
+            .unwrap()
+            .into(),
+        ))
+        .await
+        .unwrap();
+
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let Some(message) = pty_ws.next().await else {
+                return;
+            };
+            let Ok(Message::Text(text)) = message else {
+                continue;
+            };
+            let Ok(ServerText::Meta { .. }) = serde_json::from_str(&text) else {
+                continue;
+            };
+            return;
+        }
+    })
+    .await
+    .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let remove = ExecutorRequest {
+        id: json!(31),
+        method: "exbash".to_string(),
+        params: json!({"mode":"remove","asyncID":async_id}),
+        directory: None,
+        executor: None,
+        tool_timeout_ms: None,
+    };
+    tool_ws
+        .send(Message::Text(
+            serde_json::to_string(&remove).unwrap().into(),
+        ))
+        .await
+        .unwrap();
+    let Message::Text(response) = tool_ws.next().await.unwrap().unwrap() else {
+        panic!("expected text tool response");
+    };
+    let response: ExecutorResponse = serde_json::from_str(&response).unwrap();
+    assert!(response.ok, "{:?}", response.error);
+
+    let close = timeout(Duration::from_secs(2), async {
+        loop {
+            let Some(message) = pty_ws.next().await else {
+                return true;
+            };
+            match message.unwrap() {
+                Message::Close(_) => return true,
+                _ => continue,
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(close);
+}
+
+type Ws =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+async fn open_session(url: &str) -> SessionCredential {
+    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+    ws.send(Message::Text(
+        serde_json::to_string(&SessionMessage::Open {
+            client: ClientHello::default(),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let Message::Text(text) = ws.next().await.unwrap().unwrap() else {
+        panic!("session reply");
+    };
+    let SessionMessage::Opened { credential, .. } = serde_json::from_str(&text).unwrap() else {
+        panic!("session opened");
+    };
+    credential
+}
+async fn bound_ws(url: &str, credential: &SessionCredential) -> (Ws, ()) {
+    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+    ws.send(Message::Text(
+        serde_json::to_string(&SessionMessage::Bind {
+            credential: credential.clone(),
+            metadata: None,
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let Message::Text(text) = ws.next().await.unwrap().unwrap() else {
+        panic!("bind reply");
+    };
+    assert!(matches!(
+        serde_json::from_str(&text).unwrap(),
+        SessionMessage::Ok
+    ));
+    (ws, ())
+}

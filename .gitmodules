@@ -1,3 +1,0 @@
-[submodule "vendor/pty-t"]
-	path = vendor/pty-t
-	url = https://github.com/Yeamika/pty-t.git

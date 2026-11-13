@@ -1,0 +1,15 @@
+[package]
+name = "rexeterm-mcp-stdio-adapt"
+version = "0.2.13"
+edition = "2021"
+
+[features]
+default = []
+
+[dependencies]
+rexeterm-appcore = { path = "../appcore" }
+rexeterm-mcp-common = { path = "../mcp-common" }
+rexeterm-adapter-common = { path = "../adapter-common" }
+anyhow = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "macros", "sync", "io-std", "io-util"] }

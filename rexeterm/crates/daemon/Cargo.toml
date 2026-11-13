@@ -1,0 +1,16 @@
+[package]
+name = "rexeterm-daemon"
+version = "0.2.13"
+edition = "2021"
+
+[features]
+default = []
+local = ["dep:remote_executor_server"]
+kcp = ["rexeterm-appcore/kcp", "remote_executor_server?/kcp"]
+
+[dependencies]
+rexeterm-appcore = { path = "../appcore" }
+remote_executor_server = { path = "../../../rexed/crates/server", optional = true }
+anyhow = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "sync"] }

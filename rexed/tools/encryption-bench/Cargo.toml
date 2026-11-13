@@ -1,0 +1,10 @@
+[package]
+name = "re-encryption-bench"
+version = "0.0.0"
+edition = "2021"
+[workspace]
+[dependencies]
+rexe-client = {path="../../crates/client"}
+anyhow = "1"
+serde_json = "1"
+tokio = {version="1",features=["full"]}

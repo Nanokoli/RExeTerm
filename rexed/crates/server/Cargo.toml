@@ -1,0 +1,45 @@
+[package]
+name = "remote_executor_server"
+version = "0.2.13"
+edition = "2021"
+description = "RemoteExecutor execution engine, PTYs and server transports"
+[features]
+default = []
+kcp = ["remote_executor_transport/kcp"]
+
+[dependencies]
+remote_executor_data = { path = "../data" }
+remote_executor_protocol = { path = "../protocol" }
+remote_executor_transport = { path = "../transport" }
+anyhow = "1"
+argon2 = { version = "0.5", features = ["std"] }
+rcgen = "0.13"
+x509-parser = "0.18"
+tempfile = "3"
+rand = "0.9"
+diffy = "0.5"
+file-id = "0.2"
+globset = "0.4"
+grep-matcher = "0.1"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+ignore = "0.4"
+remote_executor_terminal = { path = "../terminal" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+shell-words = "1.1.1"
+tokio = { version = "1", features = ["full"] }
+unescaper = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+
+futures-util = "0.3"
+tokio-tungstenite = "0.29"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = {version="0.61",features=["Win32_Foundation","Win32_Globalization","Win32_Security","Win32_Security_Authorization","Win32_System_JobObjects","Win32_System_Threading"]}
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

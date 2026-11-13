@@ -1,43 +1,25 @@
-[package]
-name = "remote_executor"
-version = "0.2.13"
-edition = "2021"
-
-# Keep this project independent from the vendored pty-t workspace.
 [workspace]
-
-[[bin]]
-name = "remote-executor"
-path = "src/bin/executor.rs"
-
-[[bin]]
-name = "remote-caller"
-path = "src/bin/caller.rs"
-
-[[bin]]
-name = "remote-caller-mcp"
-path = "src/bin/caller_mcp.rs"
-
-[dependencies]
-anyhow = "1"
-clap = { version = "4", features = ["derive"] }
-futures-util = "0.3"
-diffy = "0.5"
-file-id = "0.2"
-globset = "0.4"
-grep-matcher = "0.1"
-grep-regex = "0.1"
-grep-searcher = "0.1"
-ignore = "0.4"
-pty_t_core = { path = "vendor/pty-t/crates/core" }
-pty_t_protocol = { path = "vendor/pty-t/crates/protocol" }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
-shell-words = "1.1.1"
-tokio = { version = "1", features = ["full"] }
-tokio-tungstenite = "0.29"
-unescaper = "0.1"
-
-[dev-dependencies]
-tempfile = "3"
+resolver = "2"
+members = [
+    "rexed",
+    "rexed/crates/protocol",
+    "rexed/crates/client",
+    "rexed/crates/server",
+    "rexed/crates/terminal",
+    "rexed/crates/transport",
+    "rexed/crates/data",
+    "rexeterm",
+    "rexeterm/crates/adapter-common",
+    "rexeterm/crates/appcore",
+    "rexeterm/crates/application",
+    "rexeterm/crates/cli",
+    "rexeterm/crates/cli-host",
+    "rexeterm/crates/config",
+    "rexeterm/crates/daemon",
+    "rexeterm/crates/http-adapt",
+    "rexeterm/crates/mcp-common",
+    "rexeterm/crates/mcp-http-adapt",
+    "rexeterm/crates/mcp-stdio-adapt",
+    "rexeterm/app/backend",
+    "rexeterm/app/src-tauri",
+]

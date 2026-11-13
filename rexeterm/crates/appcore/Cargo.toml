@@ -1,0 +1,16 @@
+[package]
+name = "rexeterm-appcore"
+version = "0.2.13"
+edition = "2021"
+[features]
+default = []
+kcp = ["rexe-client/kcp"]
+[dependencies]
+rexeterm-config = {path="../config"}
+rexe-client = { path = "../../../rexed/crates/client" }
+anyhow = "1"
+avt = "0.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["rt", "macros", "sync", "io-util"] }

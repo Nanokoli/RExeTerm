@@ -1,0 +1,9 @@
+{
+  "name": "rexeterm-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check app.js && node --check terminal-batch.js && node --check management-view.js",
+    "test": "node --test"
+  }
+}

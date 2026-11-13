@@ -1,0 +1,21 @@
+[package]
+name = "rexe-client"
+version = "0.2.13"
+edition = "2021"
+description = "RemoteExecutor node discovery, routing and WebSocket client"
+[features]
+default = []
+kcp = ["remote_executor_transport/kcp"]
+
+[dependencies]
+remote_executor_data = { path = "../data" }
+remote_executor_protocol = { path = "../protocol" }
+remote_executor_transport = { path = "../transport" }
+anyhow = "1"
+rand = "0.9"
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["net", "sync", "time", "fs"] }
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

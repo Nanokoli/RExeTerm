@@ -1,0 +1,1432 @@
+use super::runs::{format_run_details, RunDetail};
+use super::{attach::attach_read_timeout, ExbashOptions};
+use crate::{Executor, ExecutorInfo, ExecutorRequest, SettingsStore, ShellManager};
+use serde_json::json;
+use std::collections::BTreeMap;
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::time::{Duration, Instant};
+use tempfile::tempdir;
+
+#[test]
+fn exbash_attach_read_timeout_prefers_read_timeout_and_caps_legacy_timeout() {
+    let mut options = ExbashOptions {
+        io: None,
+        stdin: None,
+        keep_stdin: false,
+        close_stdin: false,
+        mode: Some("attach".to_string()),
+        shell: false,
+        shell_profile: None,
+        shell_command: None,
+        command: None,
+        title: None,
+        description: None,
+        timeout: None,
+        read_timeout: None,
+        async_id: Some("rex-test".to_string()),
+        text: None,
+        file_path: None,
+        workdir: None,
+        show_raw_pretty: false,
+    };
+
+    assert_eq!(attach_read_timeout(&options).unwrap(), 10_000);
+
+    options.timeout = Some(15_000);
+    assert_eq!(attach_read_timeout(&options).unwrap(), 10_000);
+
+    options.timeout = Some(250);
+    assert_eq!(attach_read_timeout(&options).unwrap(), 250);
+
+    options.read_timeout = Some(25);
+    assert_eq!(attach_read_timeout(&options).unwrap(), 25);
+
+    options.read_timeout = None;
+    options.timeout = Some(-1);
+    assert!(attach_read_timeout(&options).is_err());
+}
+
+#[test]
+fn exbash_list_formats_description_and_clipped_command() {
+    let text = format_run_details(&[RunDetail {
+        async_id: "rex-test".to_string(),
+        pid: None,
+        state: "running".to_string(),
+        exit_code: None,
+        total_output: 12,
+        command: "012345678901234567890123456789EXTRA\nnext".to_string(),
+        title: "任务标题\n第二行".to_string(),
+        description: "full description\nwith newline".to_string(),
+        cwd: "/tmp".to_string(),
+        timeout: None,
+        started_at: 1,
+        ended_at: None,
+        error: None,
+    }]);
+
+    assert!(text.contains(
+        "totalOutput=12 title=任务标题\\n第二行 description=full description\\nwith newline command=012345678901234567890123456789"
+    ));
+    assert!(!text.contains("EXTRA"));
+    assert!(!text.contains("description=full description\nwith newline"));
+}
+
+#[test]
+fn exbash_list_formats_default_task_metadata() {
+    let text = format_run_details(&[RunDetail {
+        async_id: "rex-empty".to_string(),
+        pid: None,
+        state: "running".to_string(),
+        exit_code: None,
+        total_output: 0,
+        command: "echo should-not-be-description".to_string(),
+        title: "未命名".to_string(),
+        description: String::new(),
+        cwd: "/tmp".to_string(),
+        timeout: None,
+        started_at: 1,
+        ended_at: None,
+        error: None,
+    }]);
+
+    assert!(text.contains("title=未命名 description= command=echo should-not-be-description"));
+    assert!(!text.contains("description=echo should-not-be-description"));
+}
+
+#[tokio::test]
+async fn executor_maps_rg_tool_timeout_to_soft_timeout() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("file.txt"), "content\n".repeat(500_000)).unwrap();
+
+    let response = Executor::local("timeout")
+        .handle(ExecutorRequest {
+            id: json!(1),
+            method: "rg".to_string(),
+            params: json!({"pattern":"needle", "root":dir.path().to_string_lossy()}),
+            directory: Some(dir.path().to_path_buf()),
+            executor: None,
+            tool_timeout_ms: Some(0),
+        })
+        .await;
+
+    assert!(response.ok, "{:?}", response.error);
+    let result = response.result.unwrap();
+    assert_eq!(result["metadata"]["timedOut"], json!(true));
+}
+
+#[tokio::test]
+async fn executor_does_not_apply_tool_timeout_to_exbash() {
+    let response = Executor::local("timeout")
+        .handle(ExecutorRequest {
+            id: json!(2),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run",
+                "command":"echo hi",
+                "description":"timeout smoke",
+                "read_timeout":2000
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: Some(0),
+        })
+        .await;
+
+    assert!(response.ok, "{:?}", response.error);
+    assert!(response.result.unwrap().to_string().contains("hi"));
+}
+
+#[tokio::test]
+async fn exbash_mode_shell_wraps_command_with_platform_shell() {
+    let command = if cfg!(windows) {
+        "Write-Output shell-ok"
+    } else {
+        "echo shell-ok"
+    };
+    let response = Executor::local("shell")
+        .handle(ExecutorRequest {
+            id: json!(35),
+            method: "exbash".to_string(),
+            params: json!({"mode":"shell",
+                "command":command,
+                "read_timeout":2000
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+
+    assert!(response.ok, "{:?}", response.error);
+    assert!(response.result.unwrap().to_string().contains("shell-ok"));
+}
+
+#[tokio::test]
+async fn executor_rejects_client_settings_tools() {
+    let executor = Executor::local("settings-tools");
+    for method in ["list_shells", "set_default_shell", "request_reload"] {
+        let response = executor
+            .handle(ExecutorRequest {
+                id: json!(method),
+                method: method.into(),
+                params: json!({"shell":"python"}),
+                directory: None,
+                executor: None,
+                tool_timeout_ms: None,
+            })
+            .await;
+        assert!(!response.ok);
+        assert!(response.error.unwrap().contains("unknown method"));
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn executor_startup_settings_are_immutable_and_ignore_workspace_files() {
+    let base = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let path = base.path().join("startup.json");
+    fs::write(&path, shell_settings("one")).unwrap();
+    let executor = Executor::local("startup")
+        .with_settings_store(SettingsStore::load(Some(path.clone())).unwrap());
+    fs::write(&path, shell_settings("two")).unwrap();
+    fs::write(workspace.path().join(".re-setting.json"), "{ broken").unwrap();
+    let response = executor
+        .handle(ExecutorRequest {
+            id: json!(1),
+            method: "exbash".into(),
+            params: json!({"mode":"shell","command":"echo run","read_timeout":2000}),
+            directory: Some(workspace.path().into()),
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(response.ok, "{:?}", response.error);
+    assert!(response.result.unwrap().to_string().contains("one-marker"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn standalone_executor_resolves_shell_candidate_from_workdir_then_base() {
+    let base = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let base_settings = base.path().join(".re-setting.json");
+    fs::write(&base_settings, shell_settings_with_zbash_candidate()).unwrap();
+    write_zbash_marker(workspace.path(), "standalone-workdir-zbash");
+
+    let settings = SettingsStore::load(Some(base_settings)).unwrap();
+    let executor = Executor::new(ExecutorInfo {
+        id: "standalone-workdir-shell".to_string(),
+        system: None,
+        device: None,
+        labels: BTreeMap::new(),
+    })
+    .with_shell_manager(ShellManager::default_shell(80, 24))
+    .with_settings_store(settings);
+
+    let response = executor
+        .handle(ExecutorRequest {
+            id: json!("standalone-workdir-shell"),
+            method: "exbash".to_string(),
+            params: json!({"mode":"shell","command":"echo run", "read_timeout":2000}),
+            directory: Some(workspace.path().to_path_buf()),
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(response.ok, "{:?}", response.error);
+    let result = response.result.unwrap();
+    assert!(result.to_string().contains("standalone-workdir-zbash"));
+    assert!(result["metadata"]["command"]
+        .as_str()
+        .unwrap()
+        .contains(".venv/bin/zbash -c echo run"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn local_executor_resolves_shell_candidate_from_workdir_then_startup_root() {
+    let base = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let subdir = workspace.path().join("subdir");
+    fs::create_dir(&subdir).unwrap();
+    let base_settings = base.path().join(".re-setting.json");
+    fs::write(&base_settings, shell_settings_with_zbash_candidate()).unwrap();
+    write_zbash_marker(base.path(), "local-base-zbash");
+    write_zbash_marker(&subdir, "local-workspace-zbash");
+
+    let settings = SettingsStore::load(Some(base_settings)).unwrap();
+    let executor = Executor::local("local-shell-tree").with_settings_store(settings);
+
+    let workspace_hit = executor
+        .handle(ExecutorRequest {
+            id: json!("local-workspace-shell"),
+            method: "exbash".to_string(),
+            params: json!({
+                "mode":"shell",
+                "command":"echo run",
+                "workdir":"subdir",
+                "read_timeout":2000
+            }),
+            directory: Some(workspace.path().to_path_buf()),
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(workspace_hit.ok, "{:?}", workspace_hit.error);
+    let workspace_result = workspace_hit.result.unwrap();
+    assert!(workspace_result
+        .to_string()
+        .contains("local-workspace-zbash"));
+    assert!(workspace_result["metadata"]["command"]
+        .as_str()
+        .unwrap()
+        .contains(".venv/bin/zbash -c echo run"));
+
+    fs::remove_file(subdir.join(".venv/bin/zbash")).unwrap();
+    let base_hit = executor
+        .handle(ExecutorRequest {
+            id: json!("local-base-shell"),
+            method: "exbash".to_string(),
+            params: json!({
+                "mode":"shell",
+                "command":"echo run",
+                "workdir":"subdir",
+                "read_timeout":2000
+            }),
+            directory: Some(workspace.path().to_path_buf()),
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(base_hit.ok, "{:?}", base_hit.error);
+    let base_result = base_hit.result.unwrap();
+    assert!(base_result.to_string().contains("local-base-zbash"));
+    assert!(base_result["metadata"]["command"]
+        .as_str()
+        .unwrap()
+        .contains(".venv/bin/zbash -c echo run"));
+}
+
+#[cfg(unix)]
+fn shell_settings(default_shell: &str) -> String {
+    json!({
+        "version": 1,
+        "shells": {
+            "default": default_shell,
+            "interactive": "one",
+            "profiles": {
+                "one": {
+                    "candidates": ["sh"],
+                    "commandArgs": ["-c", "echo one-marker; {command}"],
+                    "interactiveArgs": []
+                },
+                "two": {
+                    "candidates": ["sh"],
+                    "commandArgs": ["-c", "echo two-marker-extra; {command}"],
+                    "interactiveArgs": []
+                }
+            }
+        }
+    })
+    .to_string()
+}
+
+#[cfg(unix)]
+fn shell_settings_with_zbash_candidate() -> String {
+    json!({
+        "version": 1,
+        "shells": {
+            "default": "zbash",
+            "interactive": "bash",
+            "profiles": {
+                "zbash": {
+                    "candidates": [".venv/bin/zbash", "sh"],
+                    "commandArgs": ["-c", "{command}"],
+                    "interactiveArgs": []
+                }
+            }
+        }
+    })
+    .to_string()
+}
+
+#[cfg(unix)]
+fn write_zbash_marker(root: &std::path::Path, marker: &str) {
+    let bin = root.join(".venv/bin");
+    fs::create_dir_all(&bin).unwrap();
+    let script = bin.join("zbash");
+    fs::write(
+        &script,
+        format!("#!/bin/sh\nprintf '{}\\n'\nexec sh \"$@\"\n", marker),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(script, permissions).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn exbash_direct_does_not_use_shell_syntax() {
+    let response = Executor::local("direct")
+        .handle(ExecutorRequest {
+            id: json!(36),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run",
+                "command":"echo direct-a; echo direct-b",
+                "read_timeout":2000
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+
+    assert!(response.ok, "{:?}", response.error);
+    let text = response.result.unwrap().to_string();
+    assert!(text.contains("direct-a; echo direct-b"), "{text}");
+    assert!(!text.contains("direct-b\r\n"), "{text}");
+}
+
+#[tokio::test]
+async fn exbash_detach_returns_current_snapshot() {
+    let executor = Executor::local("detach-snapshot");
+    let command = if cfg!(windows) {
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command 'Write-Output before-detach; Start-Sleep -Seconds 5'"
+    } else {
+        "bash -lc 'echo before-detach; sleep 5'"
+    };
+
+    let start = executor
+        .handle(ExecutorRequest {
+            id: json!(21),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run",
+                "command": command,
+                "description":"detach snapshot",
+                "read_timeout":200
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+
+    assert!(start.ok, "{:?}", start.error);
+    let result = start.result.unwrap();
+    let async_id = result["metadata"]["asyncID"].as_str().unwrap().to_string();
+    assert_eq!(result["metadata"]["detached"], json!(true));
+    assert!(result["output"]["text"]
+        .as_str()
+        .unwrap()
+        .contains("before-detach"));
+    assert!(result["metadata"].get("output").is_none());
+    assert_eq!(
+        result["output"]["message"],
+        json!(format!("{async_id} detached"))
+    );
+
+    let _ = executor
+        .handle(ExecutorRequest {
+            id: json!(22),
+            method: "exbash".to_string(),
+            params: json!({"mode":"stop","asyncID":async_id.clone()}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    let _ = executor
+        .handle(ExecutorRequest {
+            id: json!(23),
+            method: "exbash".to_string(),
+            params: json!({"mode":"remove","asyncID":async_id}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn exbash_detach_uses_unnamed_title_and_empty_description() {
+    let executor = Executor::local("tmp-running-description");
+    let command = if cfg!(windows) {
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command 'Start-Sleep -Seconds 5'"
+    } else {
+        "sleep 5"
+    };
+
+    let start = executor
+        .handle(ExecutorRequest {
+            id: json!("tmp-running-start"),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run",
+                "command": command,
+                "read_timeout":0
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+
+    assert!(start.ok, "{:?}", start.error);
+    let result = start.result.unwrap();
+    let async_id = result["metadata"]["asyncID"].as_str().unwrap().to_string();
+    assert_eq!(result["metadata"]["title"], json!("未命名"));
+    assert_eq!(result["metadata"]["description"], json!(""));
+
+    let list = executor
+        .handle(ExecutorRequest {
+            id: json!("tmp-running-list"),
+            method: "exbash".to_string(),
+            params: json!({"mode":"list","asyncID":async_id.clone()}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(list.ok, "{:?}", list.error);
+    let text = list.result.unwrap().to_string();
+    assert!(text.contains("title=未命名 description="), "{text}");
+
+    let _ = executor
+        .handle(ExecutorRequest {
+            id: json!("tmp-running-remove"),
+            method: "exbash".to_string(),
+            params: json!({"mode":"remove","asyncID":async_id}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn exbash_mode_run_uses_workdir_param() {
+    let dir = tempdir().unwrap();
+    let subdir = dir.path().join("subdir");
+    fs::create_dir(&subdir).unwrap();
+    let executor = Executor::local("run-workdir");
+    let command = if cfg!(windows) {
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command '(Get-Location).Path'"
+    } else {
+        "pwd"
+    };
+
+    let response = executor
+        .handle(ExecutorRequest {
+            id: json!(124),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run", "command": command, "workdir":"subdir", "read_timeout":1000}),
+            directory: Some(dir.path().to_path_buf()),
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+
+    assert!(response.ok, "{:?}", response.error);
+    let result = response.result.unwrap();
+    assert_eq!(result["metadata"]["exitCode"], json!(0));
+    assert!(result["output"]["text"]
+        .as_str()
+        .unwrap()
+        .contains(subdir.to_string_lossy().as_ref()));
+}
+
+#[tokio::test]
+async fn exbash_detach_keeps_text_written_before_sleep() {
+    let executor = Executor::local("detach-written-text");
+    let command = if cfg!(windows) {
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command 'Write-Output detached-text; Start-Sleep -Seconds 5'"
+    } else {
+        "bash -lc 'printf detached-text; sleep 5'"
+    };
+
+    let start = executor
+        .handle(ExecutorRequest {
+            id: json!(121),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run", "command": command, "read_timeout":200}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+
+    assert!(start.ok, "{:?}", start.error);
+    let result = start.result.unwrap();
+    let async_id = result["metadata"]["asyncID"].as_str().unwrap().to_string();
+    assert_eq!(result["metadata"]["detached"], json!(true));
+    assert!(result["output"]["text"]
+        .as_str()
+        .unwrap()
+        .contains("detached-text"));
+    assert_eq!(
+        result["output"]["message"],
+        json!(format!("{async_id} detached"))
+    );
+
+    let _ = executor
+        .handle(ExecutorRequest {
+            id: json!(122),
+            method: "exbash".to_string(),
+            params: json!({"mode":"stop","asyncID":async_id.clone()}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    let _ = executor
+        .handle(ExecutorRequest {
+            id: json!(123),
+            method: "exbash".to_string(),
+            params: json!({"mode":"remove","asyncID":async_id}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn exbash_mode_remove_stops_running_process_before_removal() {
+    let executor = Executor::local("remove-running");
+    let command = if cfg!(windows) {
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command 'Start-Sleep -Seconds 5'"
+    } else {
+        "sleep 5"
+    };
+    let start = executor
+        .handle(ExecutorRequest {
+            id: json!(24),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run",
+                "command": command,
+                "read_timeout":0
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+
+    assert!(start.ok, "{:?}", start.error);
+    let async_id = start.result.unwrap()["metadata"]["asyncID"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let remove = executor
+        .handle(ExecutorRequest {
+            id: json!(25),
+            method: "exbash".to_string(),
+            params: json!({"mode":"remove","asyncID":async_id.clone()}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(remove.ok, "{:?}", remove.error);
+    let result = remove.result.unwrap();
+    assert_eq!(result["metadata"]["ok"], json!(true));
+    assert_eq!(result["output"]["text"], json!("ok"));
+
+    let attached = executor
+        .handle(ExecutorRequest {
+            id: json!(26),
+            method: "exbash".to_string(),
+            params: json!({"mode":"attach",
+                "asyncID": async_id,
+                "read_timeout":0
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(!attached.ok);
+}
+
+#[tokio::test]
+async fn exbash_total_timeout_sets_exit_code_to_timeout() {
+    let executor = Executor::local("timeout-reason");
+    let command = if cfg!(windows) {
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command 'Start-Sleep -Seconds 5'"
+    } else {
+        "sleep 5"
+    };
+
+    let response = executor
+        .handle(ExecutorRequest {
+            id: json!(37),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run",
+                "command": command,
+                "timeout":100,
+                "read_timeout":2000
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+
+    assert!(response.ok, "{:?}", response.error);
+    assert_eq!(
+        response.result.unwrap()["metadata"]["exitCode"],
+        json!("timeout")
+    );
+}
+
+#[tokio::test]
+async fn exbash_mode_stop_sets_exit_code_to_stopped() {
+    let executor = Executor::local("stop-reason");
+    let command = if cfg!(windows) {
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command 'Start-Sleep -Seconds 5'"
+    } else {
+        "sleep 5"
+    };
+
+    let start = executor
+        .handle(ExecutorRequest {
+            id: json!(38),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run",
+                "command": command,
+                "read_timeout":0
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(start.ok, "{:?}", start.error);
+    let async_id = start.result.unwrap()["metadata"]["asyncID"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let stop = executor
+        .handle(ExecutorRequest {
+            id: json!(39),
+            method: "exbash".to_string(),
+            params: json!({"mode":"stop","asyncID":async_id.clone()}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(stop.ok, "{:?}", stop.error);
+    assert_eq!(
+        stop.result.unwrap()["metadata"]["exitCode"],
+        json!("stopped")
+    );
+
+    let remove = executor
+        .handle(ExecutorRequest {
+            id: json!(40),
+            method: "exbash".to_string(),
+            params: json!({"mode":"remove","asyncID":async_id}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(remove.ok, "{:?}", remove.error);
+}
+
+#[tokio::test]
+async fn exbash_rejects_old_async_timeout_name() {
+    let response = Executor::local("timeout")
+        .handle(ExecutorRequest {
+            id: json!(7),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run",
+                "command":"echo hi",
+                "async_timeout":0
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+
+    assert!(!response.ok);
+    assert!(response.error.unwrap().contains("async_timeout"));
+}
+
+#[tokio::test]
+async fn exbash_rejects_oversized_inputs() {
+    let executor = Executor::local("input-limits");
+
+    let command = "x".repeat(4097);
+    let response = executor
+        .handle(ExecutorRequest {
+            id: json!(27),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run","command":command}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(!response.ok);
+    assert!(response.error.unwrap().contains("command exceeds 4096"));
+
+    let description = "文".repeat(201);
+    let response = executor
+        .handle(ExecutorRequest {
+            id: json!(28),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run",
+                "command":"echo hi",
+                "description":description
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(!response.ok);
+    assert!(response.error.unwrap().contains("description at most 200"));
+
+    let async_id = "x".repeat(51);
+    let response = executor
+        .handle(ExecutorRequest {
+            id: json!(29),
+            method: "exbash".to_string(),
+            params: json!({"mode":"attach",
+                "asyncID":async_id,
+                "read_timeout":0
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(!response.ok);
+    assert!(response.error.unwrap().contains("asyncID exceeds 50"));
+
+    let text = "x".repeat(4097);
+    let response = executor
+        .handle(ExecutorRequest {
+            id: json!(30),
+            method: "exbash".to_string(),
+            params: json!({"mode":"attach",
+                "asyncID":"rex-short",
+                "text":text,
+                "read_timeout":0
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(!response.ok);
+    assert!(response.error.unwrap().contains("text exceeds 4096"));
+
+    let file_path = "x".repeat(4097);
+    let response = executor
+        .handle(ExecutorRequest {
+            id: json!(31),
+            method: "exbash".to_string(),
+            params: json!({"mode":"attach",
+                "asyncID":"rex-short",
+                "filePath":file_path,
+                "read_timeout":0
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(!response.ok);
+    assert!(response.error.unwrap().contains("filePath exceeds 4096"));
+}
+
+#[tokio::test]
+async fn exbash_mode_attach_rejects_oversized_file_input() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("payload.txt"), vec![b'x'; 4097]).unwrap();
+
+    let executor = Executor::local("input-file-limit");
+    let command = if cfg!(windows) {
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command 'Start-Sleep -Seconds 5'"
+    } else {
+        "sleep 5"
+    };
+    let start = executor
+        .handle(ExecutorRequest {
+            id: json!(32),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run",
+                "command": command,
+                "read_timeout":0
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(start.ok, "{:?}", start.error);
+    let async_id = start.result.unwrap()["metadata"]["asyncID"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let attached = executor
+        .handle(ExecutorRequest {
+            id: json!(33),
+            method: "exbash".to_string(),
+            params: json!({"mode":"attach",
+                "asyncID":async_id.clone(),
+                "filePath":"payload.txt",
+                "read_timeout":0
+            }),
+            directory: Some(dir.path().to_path_buf()),
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(!attached.ok);
+    assert!(attached.error.unwrap().contains("file input exceeds 4096"));
+
+    let remove = executor
+        .handle(ExecutorRequest {
+            id: json!(34),
+            method: "exbash".to_string(),
+            params: json!({"mode":"remove","asyncID":async_id}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(remove.ok, "{:?}", remove.error);
+}
+
+#[tokio::test]
+async fn exbash_total_timeout_accepts_minus_one() {
+    let executor = Executor::local("timeout");
+    let command = if cfg!(windows) {
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command 'Start-Sleep -Seconds 5'"
+    } else {
+        "sleep 5"
+    };
+    let start = executor
+        .handle(ExecutorRequest {
+            id: json!(9),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run",
+                "command": command,
+                "timeout": -1,
+                "read_timeout": 0
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+
+    assert!(start.ok, "{:?}", start.error);
+    let result = start.result.unwrap();
+    assert_eq!(result["metadata"]["timeout"], json!(-1));
+    let async_id = result["metadata"]["asyncID"].as_str().unwrap().to_string();
+
+    let stop = executor
+        .handle(ExecutorRequest {
+            id: json!(10),
+            method: "exbash".to_string(),
+            params: json!({"mode":"stop","asyncID":async_id.clone()}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(stop.ok, "{:?}", stop.error);
+
+    let remove = executor
+        .handle(ExecutorRequest {
+            id: json!(11),
+            method: "exbash".to_string(),
+            params: json!({"mode":"remove","asyncID":async_id}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(remove.ok, "{:?}", remove.error);
+}
+
+#[tokio::test]
+async fn exbash_total_timeout_accepts_zero_as_unlimited() {
+    let executor = Executor::local("timeout");
+    let command = if cfg!(windows) {
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command 'Start-Sleep -Seconds 5'"
+    } else {
+        "sleep 5"
+    };
+    let start = executor
+        .handle(ExecutorRequest {
+            id: json!(18),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run",
+                "command": command,
+                "timeout": 0,
+                "read_timeout": 0
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+
+    assert!(start.ok, "{:?}", start.error);
+    let result = start.result.unwrap();
+    assert_eq!(result["metadata"]["timeout"], json!(0));
+    let async_id = result["metadata"]["asyncID"].as_str().unwrap().to_string();
+
+    let stop = executor
+        .handle(ExecutorRequest {
+            id: json!(19),
+            method: "exbash".to_string(),
+            params: json!({"mode":"stop","asyncID":async_id.clone()}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(stop.ok, "{:?}", stop.error);
+
+    let remove = executor
+        .handle(ExecutorRequest {
+            id: json!(20),
+            method: "exbash".to_string(),
+            params: json!({"mode":"remove","asyncID":async_id}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(remove.ok, "{:?}", remove.error);
+}
+
+#[tokio::test]
+async fn exbash_rejects_other_negative_total_timeouts() {
+    let response = Executor::local("timeout")
+        .handle(ExecutorRequest {
+            id: json!(12),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run",
+                "command":"echo hi",
+                "timeout":-2,
+                "read_timeout":0
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+
+    assert!(!response.ok);
+    assert!(response.error.unwrap().contains("timeout must be -1"));
+}
+
+#[tokio::test]
+async fn exbash_mode_attach_waits_read_timeout_and_returns_snapshot() {
+    let executor = Executor::local("attach-snapshot");
+    let command = if cfg!(windows) {
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command '$line=[Console]::In.ReadLine(); Write-Output $line; Start-Sleep -Seconds 5'"
+    } else {
+        "bash -lc 'read line; echo $line; sleep 5'"
+    };
+    let start = executor
+        .handle(ExecutorRequest {
+            id: json!(3),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run",
+                "command": command,
+                "description":"snapshot attach",
+                "read_timeout":0
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(start.ok, "{:?}", start.error);
+    let start_result = start.result.unwrap();
+    assert!(start_result["metadata"].get("read_timeout").is_none());
+    let async_id = start_result["metadata"]["asyncID"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let legacy_timeout_started = Instant::now();
+    let old_timeout = executor
+        .handle(ExecutorRequest {
+            id: json!(4),
+            method: "exbash".to_string(),
+            params: json!({"mode":"attach",
+                "asyncID": async_id.clone(),
+                "timeout":100
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(old_timeout.ok, "{:?}", old_timeout.error);
+    assert!(legacy_timeout_started.elapsed().as_millis() >= 90);
+    assert_eq!(old_timeout.result.unwrap()["metadata"]["wrote"], json!(0));
+
+    let started = Instant::now();
+    let attached = executor
+        .handle(ExecutorRequest {
+            id: json!(8),
+            method: "exbash".to_string(),
+            params: json!({"mode":"attach",
+                "asyncID": async_id.clone(),
+                "text":"hello snapshot\n",
+                "timeout":1,
+                "read_timeout":100
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(attached.ok, "{:?}", attached.error);
+    assert!(started.elapsed().as_millis() >= 90);
+
+    let result = attached.result.unwrap();
+    assert!(result["metadata"].get("read_timeout").is_none());
+    assert!(result["metadata"]["outputBytes"].as_u64().unwrap() > 0);
+    assert!(result["output"]["text"]
+        .as_str()
+        .unwrap()
+        .contains("hello snapshot"));
+    assert_eq!(result["metadata"]["terminalOutput"]["format"], "raw-pty-v1");
+    assert!(result["metadata"].get("rawPretty").is_none());
+
+    let raw_pretty = executor
+        .handle(ExecutorRequest {
+            id: json!(17),
+            method: "exbash".to_string(),
+            params: json!({"mode":"attach",
+                "asyncID": async_id.clone(),
+                "read_timeout":0,
+                "showRawPretty":true
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(raw_pretty.ok, "{:?}", raw_pretty.error);
+    assert!(raw_pretty.result.unwrap()["metadata"]["rawPretty"].is_string());
+
+    let stop = executor
+        .handle(ExecutorRequest {
+            id: json!(5),
+            method: "exbash".to_string(),
+            params: json!({"mode":"stop","asyncID":async_id.clone()}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(stop.ok, "{:?}", stop.error);
+    assert_eq!(stop.result.unwrap()["output"]["text"], "");
+
+    let remove = executor
+        .handle(ExecutorRequest {
+            id: json!(6),
+            method: "exbash".to_string(),
+            params: json!({"mode":"remove","asyncID":async_id}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(remove.ok, "{:?}", remove.error);
+    assert_eq!(remove.result.unwrap()["output"]["text"], json!("ok"));
+}
+
+#[tokio::test]
+async fn exbash_mode_attach_returns_stopped_metadata_when_process_exits_during_wait() {
+    let executor = Executor::local("attach-exits-during-wait");
+    let command = if cfg!(windows) {
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command 'Start-Sleep -Milliseconds 50; Write-Output done'"
+    } else {
+        "bash -lc 'sleep 0.05; echo done'"
+    };
+
+    let start = executor
+        .handle(ExecutorRequest {
+            id: json!("start-exit-during-attach"),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run", "command":command, "read_timeout":0}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(start.ok, "{:?}", start.error);
+    let async_id = start.result.unwrap()["metadata"]["asyncID"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let started = Instant::now();
+    let attached = executor
+        .handle(ExecutorRequest {
+            id: json!("attach-exit-during-wait"),
+            method: "exbash".to_string(),
+            params: json!({"mode":"attach", "asyncID":async_id, "read_timeout":1000}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(attached.ok, "{:?}", attached.error);
+    assert!(started.elapsed() < Duration::from_millis(900));
+
+    let result = attached.result.unwrap();
+    assert_eq!(result["metadata"]["state"], json!("stopped"));
+    assert_eq!(result["metadata"]["exitCode"], json!(0));
+    assert!(result["output"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("task exited with code 0"));
+    assert!(result["metadata"].get("message").is_none());
+    assert!(result["output"]["text"].as_str().unwrap().contains("done"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn exbash_mode_attach_errors_with_controller_id_when_control_is_stolen() {
+    let manager = ShellManager::default_shell(80, 24);
+    let executor = Executor::local("control").with_shell_manager(manager.clone());
+    let start = executor
+        .handle(ExecutorRequest {
+            id: json!(21),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run",
+                "command":"bash -lc 'read line; echo $line; sleep 5'",
+                "read_timeout":0
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(start.ok, "{:?}", start.error);
+    let async_id = start.result.unwrap()["metadata"]["asyncID"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let manager_for_steal = manager.clone();
+    let stolen_id = async_id.clone();
+    let steal = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let attachment = manager_for_steal
+            .register_client(
+                &stolen_id,
+                "ptyt".into(),
+                1,
+                80,
+                24,
+                tx,
+                "test".into(),
+                None,
+            )
+            .unwrap();
+        attachment.request_control().unwrap();
+    });
+
+    let attached = executor
+        .handle(ExecutorRequest {
+            id: json!(22),
+            method: "exbash".to_string(),
+            params: json!({"mode":"attach",
+                "asyncID": async_id.clone(),
+                "text":"hello stolen\n",
+                "read_timeout":500
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    steal.await.unwrap();
+
+    assert!(!attached.ok);
+    let error = attached.error.unwrap();
+    assert!(error.contains("someone attached"), "{error}");
+    assert!(error.contains("ptyt"), "{error}");
+
+    let stop = executor
+        .handle(ExecutorRequest {
+            id: json!(23),
+            method: "exbash".to_string(),
+            params: json!({"mode":"stop","asyncID":async_id.clone()}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(stop.ok, "{:?}", stop.error);
+
+    let remove = executor
+        .handle(ExecutorRequest {
+            id: json!(24),
+            method: "exbash".to_string(),
+            params: json!({"mode":"remove","asyncID":async_id}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(remove.ok, "{:?}", remove.error);
+}
+
+#[tokio::test]
+async fn exbash_mode_attach_returns_snapshot_for_stopped_run() {
+    let executor = Executor::local("stopped-attach");
+    let command = if cfg!(windows) {
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command 'Start-Sleep -Milliseconds 100; Write-Output stopped-output'"
+    } else {
+        "bash -lc 'sleep 0.1; printf stopped-output'"
+    };
+    let start = executor
+        .handle(ExecutorRequest {
+            id: json!(13),
+            method: "exbash".to_string(),
+            params: json!({"mode":"run",
+                "command": command,
+                "read_timeout": 0
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(start.ok, "{:?}", start.error);
+    let async_id = start.result.unwrap()["metadata"]["asyncID"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    let attached = executor
+        .handle(ExecutorRequest {
+            id: json!(14),
+            method: "exbash".to_string(),
+            params: json!({"mode":"attach",
+                "asyncID": async_id.clone(),
+                "read_timeout": 1000
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(attached.ok, "{:?}", attached.error);
+    let result = attached.result.unwrap();
+    assert_eq!(result["metadata"]["state"], json!("stopped"));
+    assert_eq!(result["metadata"]["wrote"], json!(0));
+    assert!(result["output"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("task already exited"));
+    assert!(result["metadata"].get("message").is_none());
+    assert_eq!(result["output"]["text"], "");
+
+    let input_after_stop = executor
+        .handle(ExecutorRequest {
+            id: json!(15),
+            method: "exbash".to_string(),
+            params: json!({"mode":"attach",
+                "asyncID": async_id.clone(),
+                "text":"ignored\n",
+                "read_timeout": 0
+            }),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(input_after_stop.ok, "{:?}", input_after_stop.error);
+    let result = input_after_stop.result.unwrap();
+    assert_eq!(result["metadata"]["source"], json!("text"));
+    assert_eq!(result["metadata"]["wrote"], json!(0));
+    assert!(result["output"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("input failed: task already exited"));
+    assert!(result["metadata"].get("message").is_none());
+    assert_eq!(result["output"]["text"], "");
+
+    let remove = executor
+        .handle(ExecutorRequest {
+            id: json!(16),
+            method: "exbash".to_string(),
+            params: json!({"mode":"remove","asyncID":async_id}),
+            directory: None,
+            executor: None,
+            tool_timeout_ms: None,
+        })
+        .await;
+    assert!(remove.ok, "{:?}", remove.error);
+}
+
+#[tokio::test]
+async fn task_metadata_is_scoped_to_manager_and_reclaimed_with_receipts_and_clients() {
+    use crate::{
+        context::ToolContext,
+        protocol::management::{SessionOwner, TaskMetadata},
+    };
+    let manager = ShellManager::default_shell(80, 24);
+    let owner = SessionOwner {
+        client_id: "metadata-client".into(),
+        session_id: "metadata-session".into(),
+        username: "alice".into(),
+        client_name: "test".into(),
+        client_version: "1".into(),
+    };
+    let ctx = ToolContext::new(None)
+        .with_shell_manager(manager.clone())
+        .with_client_owner(Some(owner));
+    let command = if cfg!(windows) {
+        "powershell.exe -NoProfile -Command 'Start-Sleep -Seconds 30'"
+    } else {
+        "sleep 30"
+    };
+    for expire in [false, true] {
+        let options=serde_json::from_value(json!({"mode":"run","command":command,"read_timeout":0,"title":"待清理","description":"任务状态"})).unwrap();
+        let result = super::exbash(options, &ctx).await.unwrap();
+        let id = result.metadata["asyncID"].as_str().unwrap();
+        assert_eq!(manager.task_metadata(id).title, "待清理");
+        let unrelated = ShellManager::default_shell(80, 24);
+        assert_eq!(
+            unrelated.task_metadata(id).title,
+            TaskMetadata::default().title
+        );
+        if expire {
+            manager.expire_client("metadata-client");
+        } else {
+            let options = serde_json::from_value(json!({"mode":"remove","asyncID":id})).unwrap();
+            super::exbash(options, &ctx).await.unwrap();
+        }
+        assert_eq!(manager.task_metadata(id).title, "未命名");
+        assert!(manager.task_metadata(id).description.is_empty());
+        assert!(manager.core().detail(id).is_err());
+    }
+}
