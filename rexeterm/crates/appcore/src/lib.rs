@@ -104,7 +104,18 @@ impl AppCore {
         self.history.stop();
         self.client.shutdown().await;
     }
-    pub async fn handle(&self, mut request: ExecutorRequest) -> ExecutorResponse {
+    pub async fn handle(&self, request: ExecutorRequest) -> ExecutorResponse {
+        let exbash = request.method == "exbash";
+        let mut response = self.handle_unrendered(request).await;
+        if exbash {
+            terminal_output::render(&mut response);
+        }
+        response
+    }
+
+    /// Run the same preparation and task tracking without projecting PTY bytes.
+    /// The CLI host maintains its own screen across output updates.
+    pub async fn handle_unrendered(&self, mut request: ExecutorRequest) -> ExecutorResponse {
         if request.method == "connect_to_executor" {
             let saved = (|| -> Result<()> {
                 let Some(path) = self.preferences.path() else {
@@ -113,21 +124,37 @@ impl AppCore {
                 let id = request.params["id"]
                     .as_str()
                     .ok_or_else(|| anyhow::anyhow!("executor id required"))?;
-                let directory = config::executor_directory(
-                    path.parent().unwrap_or_else(|| std::path::Path::new(".")),
-                    id,
-                );
-                let profile = config::import_profile(
-                    &directory,
-                    &request.params,
-                    request.params["username"].as_str(),
-                    &std::env::current_dir()?,
-                )?;
-                // Use the imported TLS paths for this connection too.
-                request.params = serde_json::from_slice(&std::fs::read(&profile)?)?;
+                let root = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+                let directory = config::executor_directory(root, id);
+                let credentials = config::credential_directory(root, id);
+                let mut profile = request.params["connectionProfile"]
+                    .as_str()
+                    .map(PathBuf::from);
+                config::resolve_tls_paths(&mut request.params, &std::env::current_dir()?)?;
+                // GUI/HTTP saved hosts name an external profile; only direct SDK
+                // options with inline credentials need their own private file.
+                if profile.is_none()
+                    && (!request.params["authentication"].is_null()
+                        || !request.params["tls"].is_null())
+                {
+                    let user = request.params["username"].as_str().unwrap_or("default");
+                    let target =
+                        config::user_directory(&credentials, user).join("authentication.json");
+                    config::write_json(
+                        &target,
+                        &json!({
+                            "username":request.params["username"],
+                            "authentication":request.params["authentication"],
+                            "tls":request.params["tls"],
+                        }),
+                    )?;
+                    profile = Some(target);
+                }
                 let mut public = request.params.clone();
-                public.as_object_mut().unwrap().remove("authentication");
-                public.as_object_mut().unwrap().remove("tls");
+                let fields = public.as_object_mut().expect("params with id is an object");
+                for key in ["authentication", "tls", "connectionProfile"] {
+                    fields.remove(key);
+                }
                 public["userConfig"] = json!(profile);
                 config::write_json(&directory.join("connection.json"), &public)
             })();
@@ -216,7 +243,7 @@ impl AppCore {
             Some(target) => target.clone(),
             None => self.client.default_executor().await,
         };
-        let mut response = self.client.handle(request).await;
+        let response = self.client.handle(request).await;
         if track && response.ok {
             if let Some(result) = &response.result {
                 self.history.observe(
@@ -225,9 +252,6 @@ impl AppCore {
                     result["metadata"].clone(),
                 );
             }
-        }
-        if exbash {
-            terminal_output::render(&mut response);
         }
         response
     }

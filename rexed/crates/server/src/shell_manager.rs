@@ -1,5 +1,7 @@
 pub(crate) mod attachments;
+mod pending_output;
 use attachments::AttachmentState;
+pub(crate) use pending_output::PendingOutput;
 
 use crate::protocol::{
     management::TaskMetadata,
@@ -40,6 +42,7 @@ pub struct ShellManager {
     attachments: Arc<Mutex<HashMap<String, Arc<Mutex<AttachmentState>>>>>,
     exit_watchers: Arc<Mutex<HashSet<String>>>,
     task_metadata: Arc<Mutex<HashMap<String, TaskMetadata>>>,
+    pending_output: pending_output::PendingStreams,
 }
 
 impl ShellManager {
@@ -53,6 +56,7 @@ impl ShellManager {
             attachments: Default::default(),
             exit_watchers: Arc::new(Mutex::new(HashSet::new())),
             task_metadata: Default::default(),
+            pending_output: Default::default(),
         }
     }
 
@@ -250,18 +254,21 @@ impl ShellManager {
         programs
     }
     pub fn reap_completed(&self) {
+        self.pending_output.prune();
         self.stdio.prune();
         for id in self.core.state().prune_completed(std::time::Instant::now()) {
             self.forget_receipt(&id);
         }
     }
     fn forget_receipt(&self, pty: &str) {
+        self.pending_output.remove(pty);
         self.task_metadata.lock().unwrap().remove(pty);
         self.owners.lock().unwrap().remove(pty);
         self.last_controllers.lock().unwrap().remove(pty);
         crate::tools::exbash::forget_run(pty);
     }
     pub fn remove_pty(&self, pty: &str) -> bool {
+        self.pending_output.remove(pty);
         self.task_metadata.lock().unwrap().remove(pty);
         let result = self.core.detail(pty).ok();
         let completed = self.core.state().remove_completed(pty);

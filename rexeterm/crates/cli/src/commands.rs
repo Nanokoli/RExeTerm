@@ -1,5 +1,6 @@
 //! Agent commands only build host requests; all RE state stays in the bound host.
 use crate::{
+    executors::{self, Inventory},
     ipc_client::IpcClient,
     preferences,
     services::{self, DaemonArgs, ServiceCommand},
@@ -20,6 +21,8 @@ pub const LONG_OPTIONS: &[&str] = &[
     "file",
     "raw",
     "png",
+    "tui",
+    "since",
     "stop",
     "status",
     "read",
@@ -37,6 +40,7 @@ pub const LONG_OPTIONS: &[&str] = &[
     "attach",
     "transfer",
     "executor",
+    "credential",
     "service-id",
     "registry-dir",
     "out-dir",
@@ -64,44 +68,77 @@ pub const LONG_OPTIONS: &[&str] = &[
     "command-arg",
     "interactive-arg",
 ];
-/// Rewrite `-cmd` to `--cmd`, so the single-dash spelling works everywhere.
+/// Expand single-dash options and command shortcuts before parsing.
 pub fn normalize_argv<I, T>(args: I) -> Vec<std::ffi::OsString>
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString>,
 {
-    args.into_iter()
-        .map(Into::into)
-        .map(|arg| {
+    let mut args = args.into_iter().map(Into::into).peekable();
+    let mut normalized: Vec<_> = args.next().into_iter().collect();
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            normalized.push(arg);
+            normalized.extend(args);
+            break;
+        }
+        // Shell profile arguments may contain a literal `-ec`.
+        if arg == "-ec"
+            && !matches!(
+                normalized.last().and_then(|previous| previous.to_str()),
+                Some("--command-arg" | "--interactive-arg")
+            )
+        {
+            normalized.extend(["executor", "connect"].map(std::ffi::OsString::from));
+            continue;
+        }
+        let list = match (arg.to_str(), args.peek().and_then(|next| next.to_str())) {
+            (Some("-e" | "--executor"), Some("-list_local")) => {
+                Some(&["executor", "host", "list"][..])
+            }
+            (Some("-e" | "--executor"), Some("-list_online")) => {
+                Some(&["executor", "list", "--online"][..])
+            }
+            (Some("-cr" | "--credential"), Some("-list_local")) => {
+                Some(&["credential", "list"][..])
+            }
+            _ => None,
+        };
+        if let Some(command) = list {
+            args.next();
+            normalized.extend(command.iter().copied().map(std::ffi::OsString::from));
+        } else {
             let text = arg.to_string_lossy();
-            let Some(name) = text.strip_prefix('-') else {
-                return arg;
-            };
-            if name.starts_with('-') || name.len() < 2 {
-                return arg;
+            if let Some(name) = text
+                .strip_prefix('-')
+                .filter(|name| !name.starts_with('-') && name.len() >= 2)
+            {
+                let (head, tail) = match name.find('=') {
+                    Some(index) => (&name[..index], &name[index..]),
+                    None => (name, ""),
+                };
+                if head == "cr" || LONG_OPTIONS.contains(&head) {
+                    let head = if head == "cr" { "credential" } else { head };
+                    normalized.push(format!("--{head}{tail}").into());
+                    continue;
+                }
             }
-            let (head, tail) = match name.find('=') {
-                Some(index) => (&name[..index], &name[index..]),
-                None => (name, ""),
-            };
-            if LONG_OPTIONS.contains(&head) {
-                return std::ffi::OsString::from(format!("--{head}{tail}"));
-            }
-            arg
-        })
-        .collect()
+            normalized.push(arg);
+        }
+    }
+    normalized
 }
 
 #[derive(Parser)]
 #[command(
     name = "rexeterm",
     version,
-    about = "Agent CLI: one Markdown result, then exit",
-    after_help = "Current directory opt-out: .rexeterm.disable blocks operations. Use disable to create it and enable to remove it.",
+    about = "Agent CLI for local and remote executors; results are Markdown by default",
+    after_help = "Start with `info` or `service list`. For a new project, use `service create` (add --local for the built-in executor).\nList saved executors with `-e -list_local`, connections with `-e -list_online`, and credential links with `-cr -list_local`.\nConnect with `-ec CREDENTIAL@HOSTNAME [as LIVE_ID]` (short for `executor connect`). Separate hops with `:`; the last hostname is the default live ID.\nForward with `-f PORT:TARGET_HOST@ONLINE_EXECUTOR:TARGET_PORT`; `-f` lists all forwards, `-f ID --stop` stops one. No -e needed.\nRun with `-e ID --cmd COMMAND --rcwd DIR -t 1000`. If still running, use `-e ID -A ASYNCID -t 1000`; check exitCode.\nFor a PTY, start with `--pty 80x24`. Use `-A ASYNCID --tui` or `--png FILE` for the current screen, `--text TEXT` to send keys, or `--read --raw FILE` to save retained bytes.\nSelect the local directory with cd or REXETERM_CWD; --rcwd is remote. .rexeterm.disable blocks calls in the local directory.",
     disable_help_subcommand = true
 )]
 pub struct Args {
-    /// Executor every command acts on, for example `-e local`.
+    /// Executor ID, for example `-e local`; otherwise tasks use the connected default.
     #[arg(
         short = 'e',
         long = "executor",
@@ -110,7 +147,15 @@ pub struct Args {
         display_order = 898
     )]
     pub executor: Option<String>,
-    /// Host UUID64; otherwise take the machine binding written beside the executable.
+    /// Named profile for `executor connect` (also `-cr NAME`); see `credential list`.
+    #[arg(
+        long,
+        global = true,
+        value_name = "NAME",
+        help_heading = "Global options"
+    )]
+    credential: Option<String>,
+    /// Service UUID64; otherwise read RexETermHostUUID.txt from the current directory.
     #[arg(
         long,
         global = true,
@@ -118,7 +163,7 @@ pub struct Args {
         display_order = 900
     )]
     service_id: Option<String>,
-    /// Where service bindings live; defaults to the platform registry directory.
+    /// Service runtime registry; defaults to .rexeterm-socket beside this executable.
     #[arg(
         long,
         global = true,
@@ -129,7 +174,7 @@ pub struct Args {
     /// Whole invocation deadline; timing out does not undo a host operation.
     #[arg(long, global=true, default_value_t=30000, value_parser=clap::value_parser!(u64).range(1..=600000), help_heading = "Global options", display_order = 902)]
     pub timeout_ms: u64,
-    /// Payload sinks; repeat or comma-separate: text, file, raw, png, tui.
+    /// Output sinks; repeat or comma-separate: text, file, raw, png, tui.
     #[arg(
         long,
         global = true,
@@ -147,7 +192,7 @@ pub struct Args {
         display_order = 904
     )]
     pub out_dir: Option<PathBuf>,
-    /// Inline text is cut after this many bytes; the full body still goes to file.
+    /// Limit inline text in bytes; request --sink file to also save the payload.
     #[arg(
         long,
         global = true,
@@ -156,17 +201,18 @@ pub struct Args {
         display_order = 905
     )]
     pub text_limit: usize,
-    /// Run a command without naming `run`: rexeterm -e local -cmd 'ls -la'.
+    /// Run a command (up to 4 KiB); upload longer scripts with `file upload`.
     #[arg(long = "cmd", value_name = "COMMAND")]
     pub cmd: Option<String>,
-    /// Shell profile for the bare form; see `run -s`.
+    /// Shell profile name; use `preferences shell list` to see available profiles.
     #[arg(short = 's', long = "shell")]
     pub shell: Option<String>,
-    /// Forward ID: show it, or stop it with --stop.
+    /// List forwards, start [LISTEN_HOST:]PORT:TARGET_HOST@ONLINE_EXECUTOR:TARGET_PORT, or stop ID with --stop.
     #[arg(
         short = 'F',
+        visible_short_alias = 'f',
         long = "forward",
-        value_name = "FORWARDID",
+        value_name = "SPEC_OR_ID",
         num_args = 0..=1,
         default_missing_value = ""
     )]
@@ -180,7 +226,7 @@ pub struct Args {
         default_missing_value = ""
     )]
     pub transfer: Option<String>,
-    /// Task ID to act on, or nothing to list tasks by state.
+    /// Show the current PTY screen or new stdio output; omit the ID to list tasks.
     #[arg(
         short = 'A',
         long = "attach",
@@ -189,7 +235,7 @@ pub struct Args {
         default_missing_value = ""
     )]
     pub attach: Option<String>,
-    /// Stop the task named by -A.
+    /// Stop the named -A task or -F forward, or cancel the named -T transfer.
     #[arg(long = "stop")]
     pub stop_task: bool,
     /// Send literal text to the task named by -A.
@@ -201,9 +247,12 @@ pub struct Args {
     /// Show the task's state without reading its output.
     #[arg(long = "status")]
     pub task_status: bool,
-    /// Read the task's buffered output.
+    /// Replay retained task output from the beginning instead of advancing the cursor.
     #[arg(long = "read")]
     pub task_read: bool,
+    /// Replay retained task bytes starting at an offset from a previous read.
+    #[arg(long, requires = "attach", conflicts_with_all = ["task_read", "task_input", "task_input_file", "task_text", "task_file", "stop_task", "task_status", "task_remove"])]
+    pub since: Option<u64>,
     /// Remove the task from the host and from its history.
     #[arg(long = "remove")]
     pub task_remove: bool,
@@ -213,7 +262,7 @@ pub struct Args {
     /// Send a remote file's bytes to the task named by -A.
     #[arg(long = "input-file", value_name = "PATH")]
     pub task_input_file: Option<String>,
-    /// stdin written before the command runs (stdio only).
+    /// Initial stdin (stdio only, up to 4 KiB).
     #[arg(long)]
     pub stdin: Option<String>,
     /// Keep stdin open after the initial input.
@@ -228,19 +277,22 @@ pub struct Args {
     /// Task lifetime in milliseconds, independent of this CLI call.
     #[arg(long = "task-ttl", value_name = "MS")]
     pub task_ttl: Option<u64>,
-    /// Write the raw pty byte stream to exactly this file.
+    /// Save retained PTY bytes, including terminal escape sequences, to FILE.
     #[arg(long = "raw", value_name = "FILE")]
     pub raw: Option<PathBuf>,
-    /// Write the png screenshot to exactly this file.
+    /// Write a PNG of the daemon's current PTY screen to FILE.
     #[arg(long = "png", value_name = "FILE")]
     pub png: Option<PathBuf>,
-    /// Title for the bare run form.
+    /// Print a color snapshot of the daemon's PTY screen; send keys with -A ID --text.
+    #[arg(long, global = true, help_heading = "Global options")]
+    pub tui: bool,
+    /// Task or forward title (up to 40 Unicode characters).
     #[arg(long = "title", value_name = "TEXT")]
     pub title: Option<String>,
-    /// Description for the bare run form.
+    /// Task or forward description (up to 200 Unicode characters).
     #[arg(short = 'd', long = "desc", alias = "description", value_name = "TEXT")]
     pub description: Option<String>,
-    /// Stay attached this many milliseconds; 0 reads what is buffered now.
+    /// Wait for output for 0–10000 ms; 0 returns immediately. Use -A to continue.
     #[arg(
         short = 't',
         long = "timeout",
@@ -252,7 +304,7 @@ pub struct Args {
     /// Capture stdout/stderr separately (bare form default).
     #[arg(long, conflicts_with = "pty")]
     pub stdio: bool,
-    /// Allocate a terminal (bare form), optionally `<COLSxROWS>`.
+    /// Allocate a terminal; default 80x24, maximum 300x120.
     #[arg(
         long,
         num_args = 0..=1,
@@ -271,15 +323,34 @@ pub enum Sink {
     Text,
     /// Whole body in a .txt file.
     File,
-    /// Raw pty stream in a .bin file.
+    /// Retained PTY bytes in a .bin file.
     Raw,
-    /// Screenshot in a .png file.
+    /// Current PTY screen in a .png image.
     Png,
+    /// Print the current PTY screen with color and no Markdown card.
+    Tui,
+}
+
+impl Args {
+    pub fn selected_sinks(&self) -> Vec<Sink> {
+        let mut sinks = self.sink.clone();
+        for (selected, sink) in [
+            (self.raw.is_some(), Sink::Raw),
+            (self.png.is_some(), Sink::Png),
+            (self.tui, Sink::Tui),
+        ] {
+            if selected && !sinks.contains(&sink) {
+                sinks.push(sink);
+            }
+        }
+        sinks
+    }
 }
 #[derive(Subcommand)]
 enum Command {
     /// Run this binary as the persistent rexetermd host (native local IPC).
     #[command(long_flag = "daemon", visible_alias = "deamon")]
+    Daemon(DaemonArgs),
     /// Add .rexeterm.disable in the current directory; no host is needed.
     Disable,
     /// Remove .rexeterm.disable from the current directory; no host is needed.
@@ -289,7 +360,7 @@ enum Command {
         #[command(subcommand)]
         command: ServiceCommand,
     },
-    /// Show this invocation's resolved service, executor and sinks.
+    /// Show cwd, binding, selected service and live executor without starting a daemon.
     Info,
     /// List what the bound host supports.
     Capabilities,
@@ -298,19 +369,24 @@ enum Command {
         #[command(subcommand)]
         command: ExecutorCommand,
     },
+    /// Manage named links to private authentication profiles; no daemon needed.
+    Credential {
+        #[command(subcommand)]
+        command: CredentialCommand,
+    },
     /// Remote file operations.
     File {
         #[command(subcommand)]
         command: FileCommand,
     },
-    /// Read or write host preferences.
+    /// Read or write this directory's client preferences; no daemon needed.
     Preferences {
         #[command(subcommand)]
         command: PreferenceCommand,
     },
-    /// Native IPC operation. JSON arguments are accepted; output is Markdown.
+    /// Call native IPC, e.g. `api rpc --body '{"tool":"list_executor","params":{}}'`.
     Api {
-        /// Operation name, for example `list_executor`.
+        /// IPC operation name, for example `info` or `rpc`.
         operation: String,
         #[arg(long, conflicts_with = "input")]
         body: Option<String>,
@@ -327,11 +403,17 @@ enum Command {
 /// What the invocation does: a subcommand, or the bare-flag form that replaced
 /// `run`, `task`, `transfer`, `forward` and `resources`.
 enum Action {
-    Info,
     Capabilities,
-    Executor(ExecutorCommand),
+    Disconnect(String),
+    Connect {
+        params: Value,
+        alias: bool,
+    },
+    ConnectChain {
+        hops: Vec<Value>,
+        id: String,
+    },
     File(FileCommand),
-    Preferences(PreferenceCommand),
     Api {
         operation: String,
         body: Option<String>,
@@ -349,34 +431,34 @@ impl Action {
     /// Whether this action talks to an executor and needs one resolved.
     fn needs_executor(&self) -> bool {
         match self {
-            Action::Info | Action::Capabilities => false,
-            Action::Executor(command) => command.needs_executor(),
-            Action::Preferences { .. } => false,
-            Action::Api { .. } => false,
+            Action::Capabilities
+            | Action::Disconnect(_)
+            | Action::Connect { .. }
+            | Action::ConnectChain { .. }
+            | Action::Forward(_)
+            | Action::Api { .. } => false,
             Action::Run(_) | Action::Task(_) | Action::File(_) => true,
-            Action::Transfer(_) | Action::Forward(_) => true,
+            Action::Transfer(_) => true,
         }
     }
 
     /// One executor for the whole invocation: `rexeterm -e local <command>`.
     fn set_executor(&mut self, id: &str) {
         match self {
-            Action::Executor(command) => command.set_executor(id),
             Action::File(command) => command.set_executor(id),
-            Action::Preferences(command) => command.set_executor(id),
             Action::Run(args) => args.host = id.to_owned(),
             Action::Task(command) => command.set_executor(id),
             Action::Transfer(command) => command.set_executor(id),
-            Action::Forward(command) => command.set_executor(id),
             _ => {}
         }
     }
 }
 impl Args {
-    /// The host role: `rexeterm service runasdaemon`, started by this CLI.
+    /// The host role: public foreground daemon or the internal detached child.
     pub fn daemon(&self) -> Option<(DaemonArgs, Option<String>, Option<PathBuf>)> {
         match self.command.as_ref() {
-            Some(Command::Service {
+            Some(Command::Daemon(options))
+            | Some(Command::Service {
                 command: ServiceCommand::Runasdaemon(options),
             }) => Some((
                 options.clone(),
@@ -430,15 +512,6 @@ impl TransferCommand {
         }
     }
 }
-impl ForwardCommand {
-    fn set_executor(&mut self, id: &str) {
-        match self {
-            ForwardCommand::List { host }
-            | ForwardCommand::Start { host, .. }
-            | ForwardCommand::Stop { host, .. } => *host = id.to_owned(),
-        }
-    }
-}
 impl PreferenceCommand {
     fn set_executor(&mut self, id: &str) {
         match self {
@@ -460,83 +533,39 @@ impl ShellCommand {
     }
 }
 #[derive(Subcommand)]
-enum HostCommand {
-    /// List saved hosts.
-    List,
-    /// Show one saved host.
-    Show {
-        /// Executor name.
-        #[arg(skip)]
-        host: String,
-    },
-    /// Save a new host.
-    Add {
-        /// Executor name to save.
-        #[arg(skip)]
-        host: String,
-        /// Host URL, for example tls://host:45957.
-        url: String,
-        #[arg(long)]
-        name: Option<String>,
-        #[arg(long)]
-        root: String,
-        #[arg(long)]
-        username: Option<String>,
-        #[arg(long)]
-        connection_profile: Option<PathBuf>,
-    },
-    /// Patch saved host fields using a JSON object (credentials belong in a private profile).
-    Edit {
-        /// Executor name.
-        #[arg(skip)]
-        host: String,
-        /// JSON object with the fields to patch.
-        #[arg(long)]
-        options: String,
-    },
-    /// Delete a saved host.
-    Remove {
-        /// Executor name.
-        #[arg(skip)]
-        host: String,
-    },
-    /// Connect to this saved host.
-    Connect {
-        /// Executor name.
-        #[arg(skip)]
-        host: String,
-    },
-    /// Disconnect from this saved host.
-    Disconnect {
-        /// Executor name.
-        #[arg(skip)]
-        host: String,
-    },
-    /// Show connection state for this host.
-    Status {
-        /// Executor name.
-        #[arg(skip)]
-        host: String,
-    },
-}
-#[derive(Subcommand)]
 enum ExecutorCommand {
-    /// List live executors and the saved entries behind them.
-    List,
+    /// List active connections and saved entries without starting a daemon.
+    List {
+        /// Show live connections only (also `-e -list_online`).
+        #[arg(long)]
+        online: bool,
+    },
     /// Show one executor's connection state.
     Status {
         #[arg(skip)]
         host: String,
     },
-    /// Connect the executor named by `-e`.
+    /// Connect to one saved host or a colon-separated chain; `as LIVE_ID` names the final connection.
+    #[command(
+        after_help = "Examples:\n  rexeterm -ec rb5-codex@RB5\n  rexeterm executor connect rb5-codex@RB5 as rb5_codex_exe\n  rexeterm --timeout-ms 210000 -ec Sk-a@HostA:Sk-b@HostB:Sk-c@Host-C as Cfba\n  rexeterm -e RB5 -cr rb5-codex executor connect\nEach hop uses its own saved hostname and credential. Without `as`, the last hostname is the live ID.\nA jump chain has up to 60 seconds per hop. Set --timeout-ms to wait longer for the whole invocation.\nEach jump needs RE TCP forwarding. See connections with `-e -list_online` and their forwards with `-f`."
+    )]
     Connect {
-        /// Private SDK options file (TLS/auth/multiple links); its `id` wins over `-e`.
-        #[arg(long)]
+        /// Connect using one private SDK JSON file with id and url; -e overrides id.
+        #[arg(long, conflicts_with = "selection")]
         options_file: Option<PathBuf>,
-        #[arg(skip)]
-        host: String,
+        /// Select CREDENTIAL@HOSTNAME, with optional :CREDENTIAL@HOSTNAME for each additional hop.
+        #[arg(value_name = "SELECTION")]
+        selection: Option<String>,
+        #[arg(value_parser = ["as"], requires = "alias", value_name = "as")]
+        as_keyword: Option<String>,
+        /// Name to use in the live inventory and subsequent -e calls.
+        #[arg(requires = "as_keyword", value_name = "LIVE_ID")]
+        alias: Option<String>,
+        /// Name to use in the live inventory (alternative to positional `as LIVE_ID`).
+        #[arg(long = "as", conflicts_with = "alias", value_name = "LIVE_ID")]
+        live_id: Option<String>,
     },
-    /// Drop the live connection to the executor named by `-e`.
+    /// Drop the connection named by `-e`, including its jump chain if it belongs to one.
     Disconnect {
         #[arg(skip)]
         host: String,
@@ -565,6 +594,7 @@ enum HostEntryCommand {
         #[arg(long)]
         username: Option<String>,
         #[arg(long)]
+        /// Optional private profile path; prefer -cr at connect time.
         connection_profile: Option<PathBuf>,
     },
     /// Patch saved fields with a JSON object.
@@ -583,25 +613,30 @@ enum HostEntryCommand {
 }
 
 impl ExecutorCommand {
-    /// Connection commands need `-e`; local entry commands only use it as the id.
-    fn needs_executor(&self) -> bool {
-        matches!(self, ExecutorCommand::Status { .. })
-    }
-
     fn set_executor(&mut self, id: &str) {
         match self {
-            ExecutorCommand::Status { host }
-            | ExecutorCommand::Connect { host, .. }
-            | ExecutorCommand::Disconnect { host } => *host = id.to_owned(),
+            ExecutorCommand::Status { host } | ExecutorCommand::Disconnect { host } => {
+                *host = id.to_owned()
+            }
             ExecutorCommand::Host { command } => match command {
                 HostEntryCommand::Add { host, .. }
                 | HostEntryCommand::Edit { host, .. }
                 | HostEntryCommand::Remove { host } => *host = id.to_owned(),
                 HostEntryCommand::List => {}
             },
-            ExecutorCommand::List => {}
+            ExecutorCommand::List { .. } | ExecutorCommand::Connect { .. } => {}
         }
     }
+}
+
+#[derive(Subcommand)]
+enum CredentialCommand {
+    /// List credential names and paths, without reading any secrets.
+    List,
+    /// Create a symbolic link to a private profile JSON file.
+    Link { name: String, profile: PathBuf },
+    /// Remove the link, leaving the source intact.
+    Unlink { name: String },
 }
 
 #[derive(Clone, ValueEnum)]
@@ -929,10 +964,11 @@ struct Metadata {
     /// Transfer or task title (up to 40 Unicode characters).
     #[arg(long, default_value = "未命名")]
     title: String,
-    /// Free-form description.
+    /// Transfer description (up to 200 Unicode characters).
     #[arg(long, default_value = "")]
     description: String,
-    #[arg(long)]
+    /// Expected SHA-256: 64 hex digits, with or without the sha256: prefix.
+    #[arg(long, value_parser = rexeterm_appcore::protocol::file::normalize_sha256)]
     sha256: Option<String>,
 }
 #[derive(Clone, ValueEnum)]
@@ -989,35 +1025,24 @@ enum TransferCommand {
         metadata: Metadata,
     },
 }
-#[derive(Subcommand)]
 enum ForwardCommand {
-    List {
-        #[arg(skip)]
-        host: String,
-    },
+    List,
     Start {
-        #[arg(skip)]
         host: String,
         listen: String,
         target: String,
-        #[arg(long)]
-        max_connections: Option<usize>,
-        #[arg(long, default_value = "未命名")]
         title: String,
-        #[arg(long, default_value = "")]
         description: String,
     },
     Stop {
-        #[arg(skip)]
-        host: String,
         id: String,
     },
 }
 #[derive(Subcommand)]
 enum PreferenceCommand {
-    /// Show the stored client preferences as JSON.
+    /// Show the stored client preferences.
     Show,
-    /// Shell profiles and defaults used by `run --shell`.
+    /// Shell profiles and defaults used by `--cmd` and `--shell`.
     Shell {
         #[command(subcommand)]
         command: ShellCommand,
@@ -1058,7 +1083,7 @@ enum ShellCommand {
     },
     /// Store a shell profile in rexeterm preferences.
     Set {
-        /// Profile name used by `run --shell`.
+        /// Profile name used by `--cmd` with `-s` or `--shell`.
         name: String,
         /// Program to run, for example python3 or C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe.
         #[arg(long)]
@@ -1086,7 +1111,7 @@ enum ShellCommand {
         /// Executor name; the global default when omitted.
         #[arg(skip)]
         host: Option<String>,
-        /// Remote working directory; needs --host, sets the directory layer.
+        /// Remote working directory; use with `-e ID` to set its default shell.
         #[arg(long = "rcwd", id = "rcwd", value_name = "DIR")]
         cwd: Option<String>,
     },
@@ -1113,13 +1138,11 @@ async fn rpc(
     params: Value,
     cwd: Option<&str>,
 ) -> Result<Value> {
-    // `directory` only feeds the per-folder preference layer, so falling back to
-    // the directory this invocation runs in matches user expectations.
-    let directory = preference_directory(cwd);
+    // Remote paths must never depend on the invoking machine's filesystem.
     client
         .call(
             "rpc",
-            json!({"tool":tool,"executor":host,"params":params,"directory":directory}),
+            json!({"tool":tool,"executor":host,"params":params,"directory":cwd}),
         )
         .await
 }
@@ -1129,9 +1152,36 @@ fn optional(params: &mut Value, key: &str, value: impl Into<Value>) {
         params[key] = value;
     }
 }
-async fn run(client: &IpcClient, args: RunArgs) -> Result<Value> {
+async fn run(client: &IpcClient, args: RunArgs, terminal: &Value) -> Result<Value> {
+    if matches!(args.io(), TaskIo::Stdio) {
+        require_pty_sinks(terminal)?;
+    }
     let command = args.command()?;
+    ensure!(
+        command.len() <= 4096,
+        "command exceeds 4096 bytes; upload a script with file upload and run it by path"
+    );
+    ensure!(
+        args.stdin.as_ref().is_none_or(|text| text.len() <= 4096),
+        "initial stdin exceeds 4096 bytes; upload a file for larger input"
+    );
+    ensure!(
+        args.title
+            .as_ref()
+            .is_none_or(|text| text.chars().count() <= 40),
+        "title exceeds 40 Unicode characters"
+    );
+    ensure!(
+        args.description
+            .as_ref()
+            .is_none_or(|text| text.chars().count() <= 200),
+        "description exceeds 200 Unicode characters"
+    );
     let pty_size = args.pty_size();
+    ensure!(
+        args.pty.is_none() || pty_size.is_some(),
+        "PTY size must be COLSxROWS"
+    );
     let mut params = json!({"mode":if args.direct {"run"} else {"shell"},"command":command,"read_timeout":args.wait_ms,"io":match args.io() {TaskIo::Stdio=>"stdio",TaskIo::Pty=>"pty"}});
     if args.stdin.is_some() || args.keep_stdin {
         ensure!(
@@ -1169,32 +1219,33 @@ async fn run(client: &IpcClient, args: RunArgs) -> Result<Value> {
     optional(&mut params, "title", args.title);
     optional(&mut params, "description", args.description);
     optional(&mut params, "timeout", args.task_timeout_ms);
-    let mut result = rpc(
-        client,
-        Some(&args.host),
-        "exbash",
-        params,
-        args.cwd.as_deref(),
-    )
-    .await?;
-    result["metadata"]["outputObservation"] = json!(OUTPUT_OBSERVATION_LIVE);
+    let mut result = task_rpc(client, &args.host, params, args.cwd.as_deref(), terminal).await?;
+    output_observation(&mut result, OUTPUT_OBSERVATION_LIVE);
     Ok(result)
 }
-async fn task_command(client: &IpcClient, command: TaskCommand) -> Result<Value> {
+async fn task_command(client: &IpcClient, command: TaskCommand, terminal: &Value) -> Result<Value> {
     match command {
         TaskCommand::List { host } => client.call("tasks.list", json!({"host":host})).await,
-        TaskCommand::Run(args) => run(client, args).await,
+        TaskCommand::Run(args) => run(client, args, terminal).await,
         TaskCommand::Status { host, task } => {
             client
                 .call("tasks.status", json!({"host":host,"id":task}))
                 .await
         }
-        TaskCommand::Read(task) => read_task(client, task).await,
+        TaskCommand::Read(task) => read_task(client, task, terminal).await,
         TaskCommand::Input { task, text } => {
-            attach(client, task, Some(text.replace('\\', "\\\\")), None, None).await
+            attach(
+                client,
+                task,
+                Some(text.replace('\\', "\\\\")),
+                None,
+                None,
+                terminal,
+            )
+            .await
         }
         TaskCommand::InputFile { task, path, cwd } => {
-            attach(client, task, None, Some(path), cwd.as_deref()).await
+            attach(client, task, None, Some(path), cwd.as_deref(), terminal).await
         }
         TaskCommand::CloseStdin { host, task } => rpc(
             client,
@@ -1251,23 +1302,58 @@ async fn task_command(client: &IpcClient, command: TaskCommand) -> Result<Value>
         }
     }
 }
-/// Shared note for reply metadata; the client buffer, not the host, keeps history.
+/// The daemon retains a bounded output buffer per executor and task.
 const OUTPUT_OBSERVATION_LIVE: &str =
-    "Live output for this call; task read serves the client-side buffer.";
+    "Output for this call; use -A ASYNCID to continue from the daemon's cursor.";
 const OUTPUT_OBSERVATION_BUFFERED: &str =
-    "Client buffer keeps the most recent 256 KiB; reads resume after the last cursor.";
-async fn read_task(client: &IpcClient, task: ReadTaskArgs) -> Result<Value> {
+    "Daemon buffer retains up to 256 KiB; -A ASYNCID --read replays retained output.";
+fn output_observation(result: &mut Value, fallback: &str) {
+    result["metadata"]["outputObservation"] = json!(match result["metadata"]["terminalOutput"]
+        ["view"]
+        .as_str()
+    {
+        Some("screen") => "Current PTY screen maintained by rexetermd.",
+        Some("stream") => OUTPUT_OBSERVATION_BUFFERED,
+        _ => fallback,
+    });
+}
+
+fn require_pty_sinks(terminal: &Value) -> Result<()> {
+    ensure!(
+        ["raw", "png", "tui"]
+            .iter()
+            .all(|key| terminal[*key] != true),
+        "raw, PNG and TUI output require a PTY; start the task with --pty"
+    );
+    Ok(())
+}
+
+async fn task_rpc(
+    client: &IpcClient,
+    host: &str,
+    params: Value,
+    cwd: Option<&str>,
+    terminal: &Value,
+) -> Result<Value> {
+    client.call("rpc", json!({"tool":"exbash","executor":host,"params":params,"directory":cwd,"terminal":terminal})).await
+}
+
+async fn read_task(client: &IpcClient, task: ReadTaskArgs, terminal: &Value) -> Result<Value> {
+    if task.task.starts_with("stdio-") {
+        require_pty_sinks(terminal)?;
+    }
     let mut params = json!({
         "host": task.host,
         "id": task.task,
         "wait_ms": task.wait_ms,
         "from_start": task.from_start,
+        "terminal": terminal,
     });
     if let Some(since) = task.since {
         params["since"] = json!(since);
     }
     let mut result = client.call("tasks.read", params).await?;
-    result["metadata"]["outputObservation"] = json!(OUTPUT_OBSERVATION_BUFFERED);
+    output_observation(&mut result, OUTPUT_OBSERVATION_BUFFERED);
     Ok(result)
 }
 async fn attach(
@@ -1276,12 +1362,16 @@ async fn attach(
     text: Option<String>,
     file: Option<String>,
     cwd: Option<&str>,
+    terminal: &Value,
 ) -> Result<Value> {
+    if task.task.starts_with("stdio-") {
+        require_pty_sinks(terminal)?;
+    }
     let mut params = json!({"mode":"attach","asyncID":task.task,"read_timeout":task.wait_ms});
     optional(&mut params, "text", text);
     optional(&mut params, "filePath", file);
-    let mut result = rpc(client, Some(&task.host), "exbash", params, cwd).await?;
-    result["metadata"]["outputObservation"] = json!(OUTPUT_OBSERVATION_LIVE);
+    let mut result = task_rpc(client, &task.host, params, cwd, terminal).await?;
+    output_observation(&mut result, OUTPUT_OBSERVATION_LIVE);
     Ok(result)
 }
 async fn read(client: &IpcClient, args: ReadArgs) -> Result<Value> {
@@ -1344,7 +1434,7 @@ async fn download(
     );
     params.as_object_mut().unwrap().remove("path");
     params["targetPath"] = json!(target.path);
-    params["localPath"] = json!(output);
+    params["localPath"] = json!(std::path::absolute(output)?);
     rpc(
         client,
         Some(&target.host),
@@ -1551,25 +1641,95 @@ async fn transfer_command(client: &IpcClient, command: TransferCommand) -> Resul
 pub async fn execute(mut args: Args) -> Result<Value> {
     let cwd = std::env::current_dir()?;
     let command = args.command.take();
-    // Directory opt-out is answered before anything else.
+    let sinks = args.selected_sinks();
+    let terminal = json!({"raw":sinks.contains(&Sink::Raw),"png":sinks.contains(&Sink::Png),"tui":sinks.contains(&Sink::Tui)});
+    // The opt-out always precedes registry, profile and network access.
     match &command {
         Some(Command::Disable) => return crate::directory::set(&cwd, true),
         Some(Command::Enable) => return crate::directory::set(&cwd, false),
         _ => crate::directory::check(&cwd)?,
     }
-    let registry = Registry::open(args.registry_dir.clone())?;
-    let command = match command {
-        Some(Command::Service { command }) => {
-            return services::execute(&registry, command, args.service_id.as_deref(), &cwd).await
-        }
-        other => other,
-    };
+    ensure!(
+        terminal["tui"] != true
+            || (command.is_none()
+                && (args.cmd.is_some()
+                    || args.attach.as_ref().is_some_and(|id| !id.is_empty()
+                        && !args.task_status
+                        && !args.stop_task
+                        && !args.task_remove))),
+        "--tui requires a PTY command or -A ASYNCID"
+    );
+    ensure!(
+        args.credential.is_none()
+            || matches!(
+                &command,
+                Some(Command::Executor {
+                    command: ExecutorCommand::Connect { .. }
+                })
+            ),
+        "-cr/--credential applies to executor connect"
+    );
+    let explicit = args.service_id.as_deref();
     let action = match command {
-        Some(Command::Info) => Action::Info,
+        Some(
+            Command::Info
+            | Command::Service {
+                command: ServiceCommand::Info,
+            },
+        ) => {
+            return invocation_info(&args, &cwd).await;
+        }
+        Some(Command::Service { command }) => {
+            let registry = if matches!(command, ServiceCommand::Create(_)) {
+                Registry::open(args.registry_dir)?
+            } else {
+                Registry::inspect(args.registry_dir)?
+            };
+            return services::execute(&registry, command, explicit, &cwd).await;
+        }
         Some(Command::Capabilities) => Action::Capabilities,
-        Some(Command::Executor { command }) => Action::Executor(command),
+        Some(Command::Executor { mut command }) => {
+            if let Some(id) = args.executor.as_deref() {
+                command.set_executor(id);
+            }
+            match command {
+                ExecutorCommand::Host { command } => return host_entry_command(command),
+                ExecutorCommand::List { .. } | ExecutorCommand::Status { .. } => {
+                    return executor_diagnostics(&args, &cwd, command).await;
+                }
+                ExecutorCommand::Connect {
+                    options_file,
+                    selection,
+                    as_keyword,
+                    alias,
+                    live_id,
+                } => {
+                    debug_assert_eq!(as_keyword.is_some(), alias.is_some());
+                    connect_action(
+                        options_file,
+                        selection.as_deref(),
+                        args.executor.as_deref(),
+                        args.credential.as_deref(),
+                        alias.or(live_id),
+                    )?
+                }
+                ExecutorCommand::Disconnect { host } => {
+                    ensure!(
+                        !host.is_empty(),
+                        "choose the executor to disconnect: -e ID executor disconnect"
+                    );
+                    Action::Disconnect(host)
+                }
+            }
+        }
+        Some(Command::Credential { command }) => return credential_command(command),
         Some(Command::File { command }) => Action::File(command),
-        Some(Command::Preferences { command }) => Action::Preferences(command),
+        Some(Command::Preferences { mut command }) => {
+            if let Some(id) = args.executor.as_deref() {
+                command.set_executor(id);
+            }
+            return preferences_command(command);
+        }
         Some(Command::Api {
             operation,
             body,
@@ -1583,81 +1743,228 @@ pub async fn execute(mut args: Args) -> Result<Value> {
             output,
             idempotency_key,
         },
-        Some(_) => unreachable!("service and directory commands return before this"),
-        None => bare_action(&args).context("name a command, or pass -cmd '<command>'")?,
-    };
-    // No `service create` needed: with no binding the host is started here.
-    let id = match services::selected(&registry, args.service_id.as_deref(), &cwd) {
-        Ok(id) => id,
-        Err(error) if args.service_id.is_none() => {
-            let _ = error;
-            services::ensure(&registry, &cwd).await?
+        Some(_) => unreachable!("daemon and directory commands return before this"),
+        None => {
+            bare_action(&args)?.context("name a command, or pass --cmd '<command>'; see --help")?
         }
-        Err(error) => return Err(error),
     };
-    let client = services::connect(&registry, &id).await?;
+    let registry = Registry::inspect(args.registry_dir)?;
+    let id = services::required_id(&cwd, explicit)?;
+    let client = if matches!(action, Action::Capabilities | Action::Api { .. }) {
+        services::client(&registry.resolve(&id)?)?
+    } else {
+        services::connect(&registry, &id).await?
+    };
     let mut action = action;
-    // `-e` names the executor; otherwise the host's default is used, and only
-    // for actions that actually talk to one.
-    match args.executor.clone() {
+    // Forward actions select their own exit; tasks and files can use the daemon default.
+    match args.executor {
         Some(executor) => action.set_executor(&executor),
         None if action.needs_executor() => {
-            let executor = default_executor(&client).await?;
+            let executor = Inventory::live(&client).await?.default
+                .context("no executor is connected; use -e ID executor connect -cr NAME or start a service with --local")?;
             action.set_executor(&executor);
         }
         None => {}
     }
-    execute_remote(&client, action).await
+    execute_remote(&client, action, &terminal).await
 }
 
-async fn default_executor(client: &IpcClient) -> Result<String> {
-    let value = client
-        .call("rpc", json!({"tool":"list_executor","params":{}}))
-        .await?;
-    value["metadata"]["default"]
-        .as_str()
-        .or_else(|| value["default"].as_str())
-        .map(str::to_owned)
-        .ok_or_else(|| anyhow::anyhow!("no executor is connected; run connect first"))
+fn connect_action(
+    options_file: Option<PathBuf>,
+    selection: Option<&str>,
+    host: Option<&str>,
+    credential: Option<&str>,
+    alias: Option<String>,
+) -> Result<Action> {
+    if let Some(id) = &alias {
+        executors::validate_alias(id)?;
+    }
+    let mut params = if let Some(path) = options_file {
+        ensure!(credential.is_none(), "choose --options-file or -cr NAME");
+        executors::options_file(&path, host)?
+    } else if let Some(selection) = selection {
+        ensure!(
+            host.is_none() && credential.is_none(),
+            "choose CREDENTIAL@HOSTNAME or -e HOSTNAME -cr NAME"
+        );
+        let mut hops = Vec::new();
+        for (index, hop) in selection.split(':').enumerate() {
+            let (credential, host) = hop
+                .split_once('@')
+                .filter(|(credential, host)| {
+                    !credential.is_empty() && !host.is_empty() && !host.contains('@')
+                })
+                .with_context(|| {
+                    format!(
+                        "invalid hop {}; use CREDENTIAL@HOSTNAME for each hop",
+                        index + 1
+                    )
+                })?;
+            hops.push(
+                executors::connection(host, Some(credential))
+                    .with_context(|| format!("cannot prepare hop {} ({host})", index + 1))?,
+            );
+        }
+        if hops.len() > 1 {
+            let id =
+                alias.unwrap_or_else(|| hops.last().unwrap()["id"].as_str().unwrap().to_owned());
+            executors::validate_alias(&id)?;
+            return Ok(Action::ConnectChain { hops, id });
+        }
+        hops.pop().unwrap()
+    } else {
+        let host = host.filter(|host| !host.is_empty()).context("choose a saved executor: executor connect CREDENTIAL@HOSTNAME [as LIVE_ID], or use -e HOSTNAME -cr NAME")?;
+        executors::connection(host, credential)?
+    };
+    if let Some(id) = &alias {
+        params["id"] = json!(id);
+    }
+    Ok(Action::Connect {
+        params,
+        alias: alias.is_some(),
+    })
 }
-fn bare_action(args: &Args) -> Option<Action> {
-    bare_forward(args)
+
+async fn invocation_info(args: &Args, cwd: &std::path::Path) -> Result<Value> {
+    let registry = Registry::inspect(args.registry_dir.clone())?;
+    let (mut info, client) = services::inspect(&registry, cwd, args.service_id.as_deref()).await?;
+    let inventory = match client.as_ref() {
+        Some(client) => Inventory::live(client).await?,
+        None => Inventory::default(),
+    };
+    let selected = args.executor.as_deref().or(inventory.default.as_deref());
+    let actual = selected.and_then(|id| inventory.find(id));
+    info["executorRequested"] = json!(args.executor);
+    info["defaultExecutor"] = json!(inventory.default);
+    info["executor"] = json!(actual.and_then(|entry| entry["id"].as_str()));
+    info["executorConnected"] = json!(actual.is_some());
+    info["executable"] = json!(std::env::current_exe()?);
+    info["version"] = json!(env!("CARGO_PKG_VERSION"));
+    info["buildId"] = json!(option_env!("REXETERM_BUILD_ID"));
+    info["clientConfigDir"] = json!(preferences::directory()?);
+    let sinks = args.selected_sinks();
+    info["sinks"] = json!(sinks
+        .iter()
+        .filter_map(|sink| sink.to_possible_value())
+        .map(|sink| sink.get_name().to_owned())
+        .collect::<Vec<_>>());
+    info["outDir"] = json!(cwd.join(
+        args.out_dir
+            .as_deref()
+            .unwrap_or_else(|| std::path::Path::new(".rexeterm-out"))
+    ));
+    info["textLimit"] = json!(args.text_limit);
+    info["rawPath"] = json!(args.raw.as_ref().map(|path| cwd.join(path)));
+    info["pngPath"] = json!(args.png.as_ref().map(|path| cwd.join(path)));
+    Ok(info)
+}
+
+async fn executor_diagnostics(
+    args: &Args,
+    cwd: &std::path::Path,
+    command: ExecutorCommand,
+) -> Result<Value> {
+    let registry = Registry::inspect(args.registry_dir.clone())?;
+    let (mut result, client) =
+        services::inspect(&registry, cwd, args.service_id.as_deref()).await?;
+    let inventory = match client.as_ref() {
+        Some(client) => Inventory::live(client).await?,
+        None => Inventory::default(),
+    };
+    match command {
+        ExecutorCommand::List { online } => {
+            result["default"] = json!(inventory.default);
+            result["executors"] = json!(if online {
+                inventory.executors
+            } else {
+                inventory.with_saved()?
+            });
+        }
+        ExecutorCommand::Status { host } => {
+            let id = if host.is_empty() {
+                inventory
+                    .default
+                    .as_deref()
+                    .context("no default executor; specify -e ID executor status")?
+            } else {
+                &host
+            };
+            result["id"] = json!(id);
+            result["connected"] = json!(inventory.find(id).is_some());
+            result["executor"] = json!(inventory.find(id));
+        }
+        _ => unreachable!("expected a read-only executor diagnostic"),
+    }
+    Ok(result)
+}
+
+fn bare_action(args: &Args) -> Result<Option<Action>> {
+    Ok(bare_forward(args)?
         .or_else(|| bare_transfer(args))
         .or_else(|| bare_task(args))
-        .or_else(|| bare_run(args))
+        .or_else(|| bare_run(args)))
 }
 
-/// `-F 8080:10.0.0.1:80` starts a forward; `-F` alone lists; `-F <id> -stop` stops.
-fn bare_forward(args: &Args) -> Option<Action> {
-    let value = args.forward.clone()?;
-    let host = args.executor.clone().unwrap_or_default();
+/// Omit the forward operand to list, or pass a listener and target to start.
+fn bare_forward(args: &Args) -> Result<Option<Action>> {
+    let Some(value) = args.forward.as_deref() else {
+        return Ok(None);
+    };
     if args.stop_task {
-        return Some(Action::Forward(ForwardCommand::Stop { host, id: value }));
+        ensure!(!value.is_empty(), "name the forward ID: -f ID --stop");
+        return Ok(Some(Action::Forward(ForwardCommand::Stop {
+            id: value.to_owned(),
+        })));
     }
-    // `8080:10.0.0.1:80` listens on port 8080 of this machine; a full listen
-    // address (`0.0.0.0:8080:10.0.0.1:80`) is accepted as well.
-    let parts: Vec<&str> = value.split(':').collect();
-    let parsed = match parts.as_slice() {
-        [port, host_name, target] if port.chars().all(|c| c.is_ascii_digit()) => {
-            Some((format!("127.0.0.1:{port}"), format!("{host_name}:{target}")))
-        }
-        [listen_host, port, host_name, target] => Some((
-            format!("{listen_host}:{port}"),
-            format!("{host_name}:{target}"),
-        )),
-        _ => None,
+    if value.is_empty() {
+        return Ok(Some(Action::Forward(ForwardCommand::List)));
+    }
+    const USAGE: &str =
+        "invalid forward; use -f [LISTEN_HOST:]PORT:TARGET_HOST@ONLINE_EXECUTOR:TARGET_PORT";
+    let mut in_brackets = false;
+    let parts: Vec<_> = value
+        .split(|c| match c {
+            '[' | ']' => {
+                in_brackets = c == '[';
+                false
+            }
+            ':' => !in_brackets,
+            _ => false,
+        })
+        .collect();
+    let (listen_host, listen_port, target, target_port) = match parts.as_slice() {
+        [port, target, target_port] => ("127.0.0.1", *port, *target, *target_port),
+        [host, port, target, target_port] => (*host, *port, *target, *target_port),
+        _ => anyhow::bail!(USAGE),
     };
-    let Some((listen, target)) = parsed else {
-        return Some(Action::Forward(ForwardCommand::List { host }));
-    };
-    Some(Action::Forward(ForwardCommand::Start {
-        host,
-        listen,
-        target,
-        max_connections: None,
+    let (target_host, host) = target.split_once('@').context(USAGE)?;
+    let listen_port = listen_port.parse::<u16>().context(USAGE)?;
+    let target_port = target_port.parse::<u16>().context(USAGE)?;
+    ensure!(
+        valid_forward_host(listen_host)
+            && valid_forward_host(target_host)
+            && !host.trim().is_empty()
+            && !host.contains(['@', '[', ']'])
+            && target_port != 0,
+        USAGE
+    );
+    Ok(Some(Action::Forward(ForwardCommand::Start {
+        host: host.to_owned(),
+        listen: format!("{listen_host}:{listen_port}"),
+        target: format!("{target_host}:{target_port}"),
         title: args.title.clone().unwrap_or_else(|| "未命名".to_owned()),
         description: args.description.clone().unwrap_or_default(),
-    }))
+    })))
+}
+
+fn valid_forward_host(host: &str) -> bool {
+    if let Some(addr) = host.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        return addr.parse::<std::net::Ipv6Addr>().is_ok();
+    }
+    !host.is_empty()
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
 }
 
 fn bare_transfer(args: &Args) -> Option<Action> {
@@ -1687,16 +1994,14 @@ fn bare_task(args: &Args) -> Option<Action> {
     if args.task_remove {
         return Some(Action::Task(TaskCommand::Remove { host, task: id }));
     }
-    // A fresh process has no read cursor, so a bare  asks for the
-    // whole buffered transcript; otherwise it would always come back empty.
     let read = || ReadTaskArgs {
         host: host.clone(),
         task: id.clone(),
         wait_ms: args.wait_ms,
         from_start: args.task_read,
-        since: None,
+        since: args.since,
     };
-    if args.task_read {
+    if args.task_read || args.since.is_some() {
         return Some(Action::Task(TaskCommand::Read(read())));
     }
     if let Some(text) = args.task_input.clone().or_else(|| args.task_text.clone()) {
@@ -1749,13 +2054,27 @@ fn task_rank(task: &Value) -> u8 {
         (true, true) => 2,
     }
 }
-async fn execute_remote(client: &IpcClient, action: Action) -> Result<Value> {
+async fn execute_remote(client: &IpcClient, action: Action, terminal: &Value) -> Result<Value> {
     match action {
-        Action::Info => client.call("info", json!({})).await,
         Action::Capabilities => client.call("capabilities", json!({})).await,
-        Action::Executor(command) => executor_command(client, command).await,
+        Action::Connect { params, alias } => {
+            let id = params["id"]
+                .as_str()
+                .context("expected executor id")?
+                .to_owned();
+            if alias {
+                ensure!(Inventory::live(client).await?.find(&id).is_none(), "live executor ID {id} is already connected; choose a different alias or disconnect it first");
+            }
+            rpc(client, Some(&id), "connect_to_executor", params, None).await
+        }
+        Action::ConnectChain { hops, id } => {
+            client
+                .call("hosts.connect_chain", json!({"id":id,"hops":hops}))
+                .await
+        }
+        Action::Disconnect(host) => client.call("hosts.disconnect", json!({"host":host})).await,
         Action::Task(TaskCommand::List { host }) => {
-            let value = task_command(client, TaskCommand::List { host }).await?;
+            let value = task_command(client, TaskCommand::List { host }, terminal).await?;
             let mut tasks: Vec<Value> = ["active", "completed"]
                 .iter()
                 .filter_map(|key| value[key].as_array().cloned())
@@ -1764,35 +2083,26 @@ async fn execute_remote(client: &IpcClient, action: Action) -> Result<Value> {
             tasks.sort_by_key(task_rank);
             Ok(json!({"tasks": tasks}))
         }
-        Action::Run(args) => run(client, args).await,
-        Action::Task(command) => task_command(client, command).await,
+        Action::Run(args) => run(client, args, terminal).await,
+        Action::Task(command) => task_command(client, command, terminal).await,
         Action::File(command) => file_command(client, command).await,
         Action::Transfer(command) => transfer_command(client, command).await,
         Action::Forward(command) => match command {
-            ForwardCommand::List { host } => {
-                client.call("forwards.list", json!({"host":host})).await
-            }
+            ForwardCommand::List => client.call("forwards.list", json!({})).await,
             ForwardCommand::Start {
                 host,
                 listen,
                 target,
-                max_connections,
                 title,
                 description,
             } => {
-                let mut body = json!({"listen":listen,"target":{"kind":"tcp","address":target},"title":title,"description":description});
-                optional(&mut body, "maxConnections", max_connections);
+                let body = json!({"listen":listen,"target":{"kind":"tcp","address":target},"title":title,"description":description});
                 client
                     .call("forwards.start", json!({"host":host,"options":body}))
                     .await
             }
-            ForwardCommand::Stop { host, id } => {
-                client
-                    .call("forwards.stop", json!({"host":host,"id":id}))
-                    .await
-            }
+            ForwardCommand::Stop { id } => client.call("forwards.stop", json!({"id":id})).await,
         },
-        Action::Preferences(command) => preferences_command(client, command).await,
         Action::Api {
             operation,
             body,
@@ -1805,9 +2115,19 @@ async fn execute_remote(client: &IpcClient, action: Action) -> Result<Value> {
                 (_, Some(path)) => parse_object(&tokio::fs::read_to_string(path).await?)?,
                 _ => json!({}),
             };
-            let value = client
-                .call_with_key(&operation, args, idempotency_key)
-                .await?;
+            let value = if operation == "list_executor" {
+                client
+                    .call_with_key(
+                        "rpc",
+                        json!({"tool":"list_executor","params":args}),
+                        idempotency_key,
+                    )
+                    .await?
+            } else {
+                client
+                    .call_with_key(&operation, args, idempotency_key)
+                    .await?
+            };
             if let Some(path) = output {
                 use tokio::io::AsyncWriteExt;
                 let mut file = tokio::fs::OpenOptions::new()
@@ -1826,7 +2146,7 @@ async fn execute_remote(client: &IpcClient, action: Action) -> Result<Value> {
 }
 
 /// Preferences are client data: they are read and written in this process.
-async fn preferences_command(client: &IpcClient, command: PreferenceCommand) -> Result<Value> {
+fn preferences_command(command: PreferenceCommand) -> Result<Value> {
     match command {
         PreferenceCommand::Show => Ok(serde_json::to_value(preferences::store()?.settings())?),
         PreferenceCommand::Shells { host, cwd } => {
@@ -1866,95 +2186,51 @@ async fn preferences_command(client: &IpcClient, command: PreferenceCommand) -> 
                 preferences::set_default(host.as_deref().unwrap_or_default(), cwd.as_deref(), &name)
             }
         },
-        PreferenceCommand::Reload => client.call("preferences.reload", json!({})).await,
+        PreferenceCommand::Reload => {
+            Ok(json!({"reloaded":true,"preferences":preferences::store()?.settings()}))
+        }
     }
 }
 
-/// Live executor commands talk to the host; `executor host …` edits client files.
-async fn executor_command(client: &IpcClient, command: ExecutorCommand) -> Result<Value> {
+fn credential_command(command: CredentialCommand) -> Result<Value> {
     match command {
-        ExecutorCommand::List => {
-            let live = rpc(client, None, "list_executor", json!({}), None).await?;
-            let mut executors = live["executors"].as_array().cloned().unwrap_or_default();
-            let saved = crate::executors::list()?;
-            // A saved entry that is not connected still shows up, marked as such.
-            for entry in saved["executors"].as_array().cloned().unwrap_or_default() {
-                let id = entry["id"].as_str().unwrap_or_default();
-                let connected = executors.iter().any(|e| e["id"].as_str() == Some(id));
-                if !connected {
-                    let mut entry = entry;
-                    entry["connected"] = json!(false);
-                    executors.push(entry);
-                }
-            }
-            Ok(json!({"executors": executors, "default": live["default"]}))
-        }
-        ExecutorCommand::Status { host } => {
-            host_command(client, HostCommand::Status { host }).await
-        }
-        ExecutorCommand::Connect { options_file, host } => match options_file {
-            Some(file) => {
-                let params = parse_object(&tokio::fs::read_to_string(file).await?)?;
-                // SDK connection configuration contains secrets; never echo it into output.
-                let id = params["id"].as_str().map(str::to_owned);
-                rpc(client, id.as_deref(), "connect_to_executor", params, None).await
-            }
-            None => {
-                ensure!(
-                    !host.is_empty(),
-                    "name the executor to connect: -e <EXECUTOR>"
-                );
-                let entry = crate::executors::load(&host)?;
-                rpc(client, Some(&host), "connect_to_executor", entry, None).await
-            }
-        },
-        ExecutorCommand::Disconnect { host } => {
-            host_command(client, HostCommand::Disconnect { host }).await
-        }
-        ExecutorCommand::Host { command } => match command {
-            HostEntryCommand::List => crate::executors::list(),
-            HostEntryCommand::Add {
-                host,
-                url,
-                name,
-                root,
-                username,
-                connection_profile,
-            } => {
-                ensure!(!host.is_empty(), "name the executor: -e <EXECUTOR>");
-                crate::executors::save(
-                    &host,
-                    json!({
-                        "id": host,
-                        "name": name.unwrap_or_else(|| host.clone()),
-                        "url": url,
-                        "root": root,
-                        "username": username,
-                        "connectionProfile": connection_profile,
-                    }),
-                )
-            }
-            HostEntryCommand::Edit { host, options } => {
-                ensure!(!host.is_empty(), "name the executor: -e <EXECUTOR>");
-                crate::executors::edit(&host, parse_object(&options)?)
-            }
-            HostEntryCommand::Remove { host } => {
-                ensure!(!host.is_empty(), "name the executor: -e <EXECUTOR>");
-                crate::executors::remove(&host)
-            }
-        },
+        CredentialCommand::List => executors::list_credentials(),
+        CredentialCommand::Link { name, profile } => executors::link_credential(&name, &profile),
+        CredentialCommand::Unlink { name } => executors::remove_credential(&name),
     }
 }
 
-async fn host_command(client: &IpcClient, command: HostCommand) -> Result<Value> {
+fn host_entry_command(command: HostEntryCommand) -> Result<Value> {
     match command {
-        HostCommand::List=>client.call("hosts.list",json!({})).await,
-        HostCommand::Show {host}=>client.call("hosts.show",json!({"host":host})).await,
-        HostCommand::Add {host,url,name,root,username,connection_profile}=>client.call("hosts.save",json!({"id":host,"name":name.unwrap_or_else(||host.clone()),"url":url,"root":root,"username":username,"connectionProfile":connection_profile})).await,
-        HostCommand::Edit {host,options}=>client.call("hosts.edit",json!({"host":host,"options":parse_object(&options)?})).await,
-        HostCommand::Remove {host}=>client.call("hosts.remove",json!({"host":host})).await,
-        HostCommand::Connect {host}=>client.call("hosts.connect",json!({"host":host})).await,
-        HostCommand::Disconnect {host}=>client.call("hosts.disconnect",json!({"host":host})).await,
-        HostCommand::Status {host}=>client.call("hosts.status",json!({"host":host})).await,
+        HostEntryCommand::List => executors::list_saved(),
+        HostEntryCommand::Add {
+            host,
+            url,
+            name,
+            root,
+            username,
+            connection_profile,
+        } => {
+            ensure!(!host.is_empty(), "name the executor: -e <EXECUTOR>");
+            crate::executors::save(
+                &host,
+                json!({
+                    "id": host,
+                    "name": name.unwrap_or_else(|| host.clone()),
+                    "url": url,
+                    "root": root,
+                    "username": username,
+                    "connectionProfile": connection_profile,
+                }),
+            )
+        }
+        HostEntryCommand::Edit { host, options } => {
+            ensure!(!host.is_empty(), "name the executor: -e <EXECUTOR>");
+            crate::executors::edit(&host, parse_object(&options)?)
+        }
+        HostEntryCommand::Remove { host } => {
+            ensure!(!host.is_empty(), "name the executor: -e <EXECUTOR>");
+            crate::executors::remove(&host)
+        }
     }
 }

@@ -4,11 +4,11 @@ version = "0.2.13"
 edition = "2021"
 [features]
 default = ["daemon", "local"]
-daemon = ["ipc-client", "dep:rexeterm-daemon", "dep:rexeterm-application"]
+daemon = ["ipc-client", "dep:rexeterm-daemon", "dep:rexeterm-application", "dep:url", "dep:avt", "dep:fontdue", "dep:png"]
 local = ["daemon", "rexeterm-daemon/local"]
 stdio = ["dep:rexeterm-adapter-common"]
 admin = ["dep:unicode-width", "dep:remote_executor_protocol"]
-ipc-client = ["dep:futures-util", "dep:rexeterm-cli-host", "dep:rand", "dep:tempfile"]
+ipc-client = ["dep:futures-util", "dep:rexeterm-cli-host", "dep:rand", "dep:tempfile", "dep:base64"]
 # Compatibility feature name; the CLI uses native IPC, never HTTP.
 http-client = ["ipc-client"]
 [[bin]]
@@ -30,6 +30,11 @@ unicode-width = { version = "0.2", optional = true }
 rand = {version="0.9",optional=true}
 tempfile = {version="3",optional=true}
 futures-util = {version="0.3",optional=true}
-fontdue = { version = "0.9", features = ["std"] }
-png = "0.18"
-avt = "0.20"
+url = {version="2",optional=true}
+fontdue = { version = "0.9", features = ["std"], optional = true }
+png = { version = "0.18", optional = true }
+avt = { version = "0.20", optional = true }
+base64 = { version = "0.22", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }

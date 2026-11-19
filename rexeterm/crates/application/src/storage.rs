@@ -39,51 +39,25 @@ pub(super) fn read(path: &Path, defaults: Workspace) -> Result<Workspace> {
         last_host: value["lastHost"].as_str().map(str::to_owned),
     })
 }
-pub(super) fn prepare(path: &Path, mut host: Host) -> Result<Host> {
-    let directory = config::executor_directory(root(path)?, &host.id);
-    if let Some(source) = host.connection_profile.as_ref() {
-        let source = if source.is_absolute() {
-            source.clone()
-        } else {
-            std::env::current_dir()?.join(source)
-        };
-        let auth: Value = serde_json::from_slice(
-            &std::fs::read(&source).context("cannot read connection profile")?,
-        )?;
-        host.connection_profile = Some(config::import_profile(
-            &directory,
-            &auth,
-            host.username.as_deref(),
-            source.parent().unwrap(),
-        )?);
+pub(super) fn prepare(mut host: Host) -> Result<Host> {
+    if let Some(source) = host.connection_profile.as_mut() {
+        *source = std::path::absolute(&*source)?;
+        config::load_connection_profile(source)?;
     }
     if let Some(settings) = host.management.take() {
-        host.management = Some(prepare_management(path, &host.id, settings)?);
+        host.management = Some(prepare_management(settings)?);
     }
     Ok(host)
 }
 
-pub(super) fn prepare_management(
-    path: &Path,
-    id: &str,
-    mut settings: ManagementSettings,
-) -> Result<ManagementSettings> {
+pub(super) fn prepare_management(mut settings: ManagementSettings) -> Result<ManagementSettings> {
     settings.target = settings
         .target
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty());
-    if let Some(source) = settings.connection_profile.as_ref() {
-        let source = std::path::absolute(source)?;
-        let profile: Value = serde_json::from_slice(
-            &std::fs::read(&source).context("cannot read management connection profile")?,
-        )?;
-        let directory = config::executor_directory(root(path)?, id).join("management");
-        settings.connection_profile = Some(config::import_profile(
-            &directory,
-            &profile,
-            None,
-            source.parent().unwrap(),
-        )?);
+    if let Some(source) = settings.connection_profile.as_mut() {
+        *source = std::path::absolute(&*source)?;
+        config::load_connection_profile(source).context("invalid management connection profile")?;
     }
     Ok(settings)
 }
@@ -104,31 +78,26 @@ pub(super) fn write(path: &Path, state: &Workspace) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn imports_auth_and_keys_and_round_trips_executor_index() {
+    fn retains_external_profile_and_round_trips_executor_index() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("config");
         std::fs::write(temp.path().join("certificate.pem"), b"test-key").unwrap();
         let source = temp.path().join("source.json");
         std::fs::write(&source,serde_json::to_vec(&json!({"username":"alice","authentication":{"method":"password","password":"private-value"},"tls":{"caFile":"certificate.pem"}})).unwrap()).unwrap();
         let path = root.join("workspace.json");
-        let host = prepare(
-            &path,
-            Host {
-                id: "node".into(),
-                name: "Node".into(),
-                url: "tls://127.0.0.1:1".into(),
-                root: "/".into(),
-                username: Some("alice".into()),
-                connection_profile: Some(source.clone()),
-                management: None,
-            },
-        )
+        let host = prepare(Host {
+            id: "node".into(),
+            name: "Node".into(),
+            url: "tls://127.0.0.1:1".into(),
+            root: "/".into(),
+            username: Some("alice".into()),
+            connection_profile: Some(source.clone()),
+            management: None,
+        })
         .unwrap();
-        let imported = host.connection_profile.clone().unwrap();
-        let executor_directory =
-            std::fs::canonicalize(config::executor_directory(&root, "node")).unwrap();
-        assert!(imported.starts_with(executor_directory));
-        let auth: Value = serde_json::from_slice(&std::fs::read(imported).unwrap()).unwrap();
+        assert_eq!(host.connection_profile.as_ref(), Some(&source));
+        assert!(!root.exists());
+        let auth = config::load_connection_profile(&source).unwrap();
         assert_eq!(
             std::fs::read(auth["tls"]["caFile"].as_str().unwrap()).unwrap(),
             b"test-key"
@@ -181,7 +150,7 @@ mod tests {
             target: Some("  tls://127.0.0.1:2  ".into()),
             connection_profile: Some(admin),
         });
-        let host = prepare(&path, host).unwrap();
+        let host = prepare(host).unwrap();
         let business_path = host.connection_profile.as_ref().unwrap();
         let admin_path = host
             .management
@@ -191,17 +160,13 @@ mod tests {
             .as_ref()
             .unwrap();
         assert_ne!(business_path, admin_path);
-        assert!(admin_path.starts_with(
-            std::fs::canonicalize(
-                config::executor_directory(path.parent().unwrap(), "node").join("management")
-            )
-            .unwrap()
-        ));
+        assert_eq!(admin_path, &temp.path().join("admin.json"));
+        assert_eq!(business_path, &temp.path().join("business.json"));
         for (file, password, ca) in [
             (business_path, "business-secret", "business-ca"),
             (admin_path, "admin-secret", "admin-ca"),
         ] {
-            let value: Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+            let value = config::load_connection_profile(file).unwrap();
             assert_eq!(value["authentication"]["password"], password);
             assert_eq!(
                 std::fs::read_to_string(value["tls"]["caFile"].as_str().unwrap()).unwrap(),

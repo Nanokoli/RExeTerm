@@ -11,14 +11,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Project directory the CLI keeps everything it creates under.
+/// Project directory for CLI preferences and saved entries.
 pub const PROJECT_DIR: &str = ".rexeterm";
-/// Binding file inside the registry: the machine's host UUID64, written by the host.
-pub const BINDING_NAME: &str = "binding";
-/// UUID file inside the registry: what the CLI wants the host to serve.
-pub const UUID_NAME: &str = "uuid";
-/// Pre-`.rexeterm` binding file, still read so old projects keep working.
-pub const LEGACY_BINDING_FILE: &str = "RexETermHostUUID.txt";
+pub const BINDING_FILE: &str = "RexETermHostUUID.txt";
 pub const ID_HEADER: &str = "x-rexeterm-service-id";
 pub fn validate_id(id: &str) -> Result<()> {
     ensure!(
@@ -51,15 +46,19 @@ pub struct Registry {
 }
 impl Registry {
     pub fn open(base: Option<PathBuf>) -> Result<Self> {
-        Self::for_boot(
-            match base {
-                Some(base) => base,
-                None => default_directory()?,
-            },
-            boot_id()?,
-        )
+        Self::for_boot(Self::base(base)?, boot_id()?, true)
     }
-    fn for_boot(base: PathBuf, boot_id: String) -> Result<Self> {
+    /// Inspect an existing registry without creating directories or files.
+    pub fn inspect(base: Option<PathBuf>) -> Result<Self> {
+        Self::for_boot(Self::base(base)?, boot_id()?, false)
+    }
+    fn base(base: Option<PathBuf>) -> Result<PathBuf> {
+        match base {
+            Some(base) => Ok(base),
+            None => default_directory(),
+        }
+    }
+    fn for_boot(base: PathBuf, boot_id: String, create: bool) -> Result<Self> {
         ensure!(
             !boot_id.is_empty()
                 && boot_id.len() <= 100
@@ -68,10 +67,20 @@ impl Registry {
                     .all(|b| b.is_ascii_alphanumeric() || b == b'-'),
             "invalid OS boot ID"
         );
-        private_directory(&base)?;
-        let base = std::fs::canonicalize(base)?;
+        if create {
+            private_directory(&base)?;
+        }
+        let base = match std::fs::canonicalize(&base) {
+            Ok(path) => path,
+            Err(error) if !create && error.kind() == std::io::ErrorKind::NotFound => {
+                std::path::absolute(base)?
+            }
+            Err(error) => return Err(error.into()),
+        };
         let directory = base.join(&boot_id);
-        private_directory(&directory)?;
+        if create {
+            private_directory(&directory)?;
+        }
         Ok(Self { directory, boot_id })
     }
     pub fn directory(&self) -> &Path {
@@ -90,7 +99,12 @@ impl Registry {
     }
     pub fn records(&self) -> Result<Vec<ServiceRecord>> {
         let mut records = Vec::new();
-        for entry in std::fs::read_dir(&self.directory)? {
+        let entries = match std::fs::read_dir(&self.directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(records),
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries {
             let path = entry?.path();
             if path.extension().is_some_and(|e| e == "json") {
                 let Some(id) = path.file_stem().and_then(|v| v.to_str()) else {
@@ -107,7 +121,7 @@ impl Registry {
     pub fn resolve(&self, id: &str) -> Result<ServiceRecord> {
         let id = normalize_id(id)?;
         let mut file = File::open(self.path(&id)).with_context(|| {
-            format!("unknown service {id} in this OS boot; use service create/list and bind again")
+            format!("cannot find service {id} in {}; check --registry-dir and run service list or service create", self.directory.display())
         })?;
         ensure!(
             file.metadata()?.len() <= 65536,
@@ -222,50 +236,36 @@ impl Drop for Registration {
         }
     }
 }
-impl Registry {
-    /// One host serves the whole machine, so the binding belongs to the registry.
-    pub fn binding_path(&self) -> PathBuf {
-        self.base_directory().join(BINDING_NAME)
+pub fn read_binding(cwd: &Path) -> Result<Option<(String, PathBuf)>> {
+    for path in [
+        cwd.join(BINDING_FILE),
+        cwd.join(PROJECT_DIR).join("binding"),
+    ] {
+        let mut file = match File::open(&path) {
+            Ok(file) => file.take(65),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).with_context(|| format!("read binding {}", path.display()))
+            }
+        };
+        let mut text = String::new();
+        file.read_to_string(&mut text)
+            .with_context(|| format!("read binding {}", path.display()))?;
+        ensure!(
+            text.len() <= 64,
+            "CLI binding {} exceeds 64 bytes",
+            path.display()
+        );
+        let id =
+            normalize_id(&text).with_context(|| format!("invalid binding {}", path.display()))?;
+        return Ok(Some((id, path)));
     }
-    pub fn read_binding(&self, cwd: &Path) -> Result<String> {
-        let shared = self.binding_path();
-        // Older layouts are still read so existing installs keep working.
-        let local = cwd.join(PROJECT_DIR).join(BINDING_NAME);
-        let legacy = cwd.join(LEGACY_BINDING_FILE);
-        let path = [&shared, &local, &legacy]
-            .into_iter()
-            .find(|path| path.exists())
-            .unwrap_or(&shared);
-        if let Ok(metadata) = std::fs::metadata(path) {
-            ensure!(metadata.len() <= 64, "CLI binding file exceeds 64 bytes");
-        }
-        let text = std::fs::read_to_string(path).with_context(|| {
-            format!(
-                "no CLI host binding: specify --service-id, run bind <UUID64>, or service create; binding file: {}",
-                shared.display()
-            )
-        })?;
-        normalize_id(&text)
-    }
-    pub fn write_binding(&self, id: &str) -> Result<()> {
-        let id = normalize_id(id)?;
-        write_atomic(&self.binding_path(), format!("{id}\n").as_bytes())
-    }
-    /// UUID the CLI asked for but no host has confirmed yet.
-    pub fn uuid_path(&self) -> PathBuf {
-        self.base_directory().join(UUID_NAME)
-    }
-    pub fn read_uuid(&self) -> Option<String> {
-        let text = std::fs::read_to_string(self.uuid_path()).ok()?;
-        normalize_id(&text).ok()
-    }
-    pub fn write_uuid(&self, id: &str) -> Result<()> {
-        let id = normalize_id(id)?;
-        write_atomic(&self.uuid_path(), format!("{id}\n").as_bytes())
-    }
-    pub fn clear_uuid(&self) {
-        let _ = std::fs::remove_file(self.uuid_path());
-    }
+    Ok(None)
+}
+
+pub fn write_binding(cwd: &Path, id: &str) -> Result<()> {
+    let id = normalize_id(id)?;
+    write_atomic(&cwd.join(BINDING_FILE), format!("{id}\n").as_bytes())
 }
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file =
@@ -390,7 +390,7 @@ mod tests {
     fn host_identity_survives_process_registration_but_never_crosses_boots() {
         let root = tempfile::tempdir().unwrap();
         let config = root.path().join("config");
-        let a = Registry::for_boot(root.path().join("runtime"), "boot-a".into()).unwrap();
+        let a = Registry::for_boot(root.path().join("runtime"), "boot-a".into(), true).unwrap();
         let record = a.reserve(&config, false).unwrap();
         let mut live = a.start(&record.id).unwrap();
         live.publish("unix:///example.sock".into(), None).unwrap();
@@ -398,7 +398,7 @@ mod tests {
         drop(live);
         assert_eq!(a.reserve(&config, false).unwrap().id, record.id);
         assert!(a.resolve(&record.id).unwrap().target.is_none());
-        let b = Registry::for_boot(root.path().join("runtime"), "boot-b".into()).unwrap();
+        let b = Registry::for_boot(root.path().join("runtime"), "boot-b".into(), true).unwrap();
         assert!(b.resolve(&record.id).is_err());
         assert_ne!(b.reserve(&config, false).unwrap().id, record.id);
     }
@@ -407,25 +407,24 @@ mod tests {
         assert_eq!(boot_id().unwrap(), boot_id().unwrap());
     }
     #[test]
-    fn binding_is_machine_wide() {
+    fn bindings_are_local_and_the_primary_takes_precedence() {
         let root = tempfile::tempdir().unwrap();
-        let registry = Registry::for_boot(root.path().join("runtime"), "boot-a".into()).unwrap();
-        let a = tempfile::tempdir().unwrap();
-        let b = tempfile::tempdir().unwrap();
-        registry.write_binding("abcdef0123456789").unwrap();
-        assert_eq!(registry.read_binding(a.path()).unwrap(), "abcdef0123456789");
-        // A different directory sees the same host: one host per machine.
-        assert_eq!(registry.read_binding(b.path()).unwrap(), "abcdef0123456789");
-        // A directory-local binding from an older layout still wins as a fallback.
-        std::fs::create_dir_all(b.path().join(PROJECT_DIR)).unwrap();
-        std::fs::write(
-            b.path().join(PROJECT_DIR).join(BINDING_NAME),
-            "1111111111111111\n",
-        )
-        .unwrap();
-        std::fs::remove_file(registry.binding_path()).unwrap();
-        assert_eq!(registry.read_binding(b.path()).unwrap(), "1111111111111111");
-        assert!(registry.read_binding(a.path()).is_err());
+        let a = root.path();
+        let b = a.join("child");
+        std::fs::create_dir_all(b.join(PROJECT_DIR)).unwrap();
+        write_binding(a, "abcdef0123456789").unwrap();
+        assert_eq!(read_binding(a).unwrap().unwrap().0, "abcdef0123456789");
+        assert!(read_binding(&b).unwrap().is_none());
+        let legacy = b.join(PROJECT_DIR).join("binding");
+        std::fs::write(&legacy, "1111111111111111\n").unwrap();
+        assert_eq!(
+            read_binding(&b).unwrap(),
+            Some(("1111111111111111".into(), legacy))
+        );
+        write_binding(&b, "2222222222222222").unwrap();
+        assert_eq!(read_binding(&b).unwrap().unwrap().0, "2222222222222222");
+        std::fs::write(b.join(BINDING_FILE), "invalid-id").unwrap();
+        assert!(read_binding(&b).is_err());
         assert!(normalize_id("../../bad").is_err());
         assert!(normalize_id("0000000000000000").is_err());
     }

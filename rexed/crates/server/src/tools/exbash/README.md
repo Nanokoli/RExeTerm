@@ -316,9 +316,9 @@ Response:
 
 ## Raw terminal output
 
-rexed forwards raw PTY bytes without a VT parser or historical output buffer. New observers only receive output after subscribing. Each viewer has a 4 MiB byte-bounded in-flight queue that coalesces already available bytes into at most 64 KiB chunks; no fixed batching delay is added. Slow viewers fail independently. Exbash collects bytes only for its current request window; subsequent attach/stop cannot recover earlier output. Rendering belongs to the client, and screen recovery is outside this throughput prototype.
+rexed forwards raw PTY bytes without a VT parser or historical output buffer. New observers only receive output after subscribing. Each viewer has a 4 MiB byte-bounded in-flight queue that coalesces already available bytes into at most 64 KiB chunks; no fixed batching delay is added. Slow viewers fail independently. Exbash collects bytes only for its current request window; subsequent attach/stop cannot recover earlier output.
 
-Exbash responses declare `metadata.terminalOutput.format: raw-pty-v1` and terminal dimensions. `output.text` is a lossy UTF-8 projection retaining terminal escapes. RexETerm AppCore renders observation results for MCP/CLI; completed runs keep their collected transcript (`view: stream`).
+Exbash responses declare `metadata.terminalOutput.format: raw-pty-v1` and terminal dimensions. `output.text` is a lossy UTF-8 projection retaining terminal escapes. Completed ordinary runs keep their collected transcript (`view: stream`). For continuous capture, executors advertising `ptyOutputStream` accept `streamOutput: true` on a PTY start. The response returns immediately with the task ID and `ptyOutputStream: true`; the owning client can claim the live subscription with `observe_terminal` within 30 seconds. It receives binary output from process start and the final exit status, even for a task that already finished. Each subscription can be claimed once, within the same in-flight byte budget. The connection only sends output; use the ordinary exbash input path to send keys.
 
 A known PTY ID permits same-RE-username clients to observe without input. Inventories remain client-scoped. Cross-client viewers cannot write, resize, request control, or become a controller on disconnect. App-embedded MCP shares the App client identity.
 

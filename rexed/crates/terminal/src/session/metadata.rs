@@ -1,10 +1,14 @@
 //! Runtime-owned session summaries, independent of wire messages.
 use super::{Session, SessionDetail, SessionSummary};
-use crate::types::path_text;
+use crate::types::{path_text, TermSize};
 
 impl Session {
+    pub fn terminal_size(&self) -> TermSize {
+        *self.size.lock().unwrap()
+    }
+
     pub fn summary(&self) -> SessionSummary {
-        let size = *self.size.lock().unwrap();
+        let size = self.terminal_size();
         SessionSummary {
             pty: self.name.clone(),
             command: self.command.argv(),

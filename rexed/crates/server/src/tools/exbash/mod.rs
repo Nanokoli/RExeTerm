@@ -26,6 +26,12 @@ pub async fn exbash(options: ExbashOptions, ctx: &ToolContext) -> Result<ToolRes
         "io must be stdio or pty"
     );
     anyhow::ensure!(
+        !options.stream_output
+            || (options.io.as_deref() != Some("stdio")
+                && matches!(options.mode.as_deref(), Some("run" | "shell"))),
+        "streamOutput requires a PTY run or shell"
+    );
+    anyhow::ensure!(
         (options.io.as_deref() == Some("stdio")
             || options
                 .async_id

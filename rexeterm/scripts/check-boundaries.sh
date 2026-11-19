@@ -14,7 +14,7 @@ check_tree() {
             appcore:axum\ *|appcore:rexeterm-daemon\ *|appcore:rexeterm-mcp-*|appcore:rexeterm-cli\ *|appcore:clap\ *) echo "Host/adapter dependency in AppCore: $dependency" >&2; return 1 ;;
             application:axum\ *|application:tauri\ *|application:rexeterm-daemon\ *|application:rexeterm-mcp-*|application:rexeterm-http-adapt\ *|application:rexeterm-cli\ *) echo "Host/adapter dependency in Application: $dependency" >&2; return 1 ;;
             rest:rexeterm-daemon\ *|rest:tauri\ *|rest:rexeterm-mcp-*) echo "Host/MCP dependency in REST adapter: $dependency" >&2; return 1 ;;
-            cli-client:rexe-client\ *|cli-client:rexeterm-appcore\ *|cli-client:rexeterm-daemon\ *|cli-client:remote_executor_*|cli-client:axum\ *|cli-client:reqwest\ *|cli-client:hyper\ *|cli-client:rexeterm-http-adapt\ *) echo "RE/core dependency in HTTP CLI: $dependency" >&2; return 1 ;;
+            cli-client:rexeterm-daemon\ *|cli-client:rexeterm-application\ *|cli-client:axum\ *|cli-client:reqwest\ *|cli-client:hyper\ *|cli-client:rexeterm-http-adapt\ *) echo "Host/HTTP dependency in IPC CLI: $dependency" >&2; return 1 ;;
             daemon:axum\ *|daemon:rexeterm-mcp-*|daemon:rexeterm-cli\ *) echo "Adapter dependency in daemon: $dependency" >&2; return 1 ;;
             mcp-stdio:axum\ *|mcp-stdio:rexeterm-daemon\ *|mcp-stdio:rexeterm-mcp-http-adapt\ *) echo "Host/HTTP dependency in stdio adapter: $dependency" >&2; return 1 ;;
             http:rexeterm-daemon\ *|http:rexeterm-mcp-stdio-adapt\ *) echo "Host/stdio dependency in HTTP adapter: $dependency" >&2; return 1 ;;

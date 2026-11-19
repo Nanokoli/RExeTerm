@@ -13,6 +13,7 @@ use tempfile::tempdir;
 fn exbash_attach_read_timeout_prefers_read_timeout_and_caps_legacy_timeout() {
     let mut options = ExbashOptions {
         io: None,
+        stream_output: false,
         stdin: None,
         keep_stdin: false,
         close_stdin: false,

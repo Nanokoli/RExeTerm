@@ -26,6 +26,10 @@ use tokio::{
     net::TcpStream,
     time::{sleep, timeout},
 };
+
+#[path = "support/re_session.rs"]
+mod session;
+
 fn options(url: String) -> ConnectExecutorOptions {
     ConnectExecutorOptions {
         authentication: None,
@@ -297,8 +301,6 @@ async fn hash_failure_and_overwrite_rejection_preserve_original_file() {
 }
 #[tokio::test]
 async fn aborted_upload_and_invalid_end_never_replace_the_target() {
-    #[path = "support/re_session.rs"]
-    mod session;
     for invalid_end in [false, true] {
         let root = tempdir().unwrap();
         let target = root.path().join("target");

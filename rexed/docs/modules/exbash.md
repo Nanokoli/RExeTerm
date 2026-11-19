@@ -192,7 +192,9 @@ Windows 使用配置了 KILL_ON_JOB_CLOSE 的 Job Object。
 
 rexed 不再解析终端屏幕。`output.text` 保留原始终端操作的 UTF-8 投影，
 `metadata.terminalOutput.format` 为 `raw-pty-v1`，并提供尺寸。
-RexETerm AppCore 对本次观察片段按需解析为文字，GUI 的实时二进制流由 xterm 解析。
+RexETerm AppCore 为 MCP 对本次观察片段按需解析为文字，GUI 的实时二进制流由 xterm 解析。
+CLI 的 `rexetermd` 通过 `streamOutput: true` 启动并交接从首字节开始的二进制订阅，
+在 daemon 进程中维护可见屏幕和回放。具体用法见[原始输出接口](../build-and-api.md#原始输出与只读查看)。
 单次命令回答最多保留 1 MiB 原始输出，超出标记 `outputTruncated`；实时流不受此回答上限影响。
 结束任务不再保留原生 PTY，`status` 读取短期终态回执，长期历史归客户端。
 

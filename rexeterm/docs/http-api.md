@@ -10,9 +10,9 @@ MCP stdio / MCP HTTP 是独立适配器，不使用这里的 REST 路由。
 ## CLI 宿主与目录绑定
 
 CLI 仅需一个 `rexeterm` 二进制，`service create/start` 自启动同一程序的 `daemon` 模式。
-当前目录的 `.rexeterm/binding` 选择默认 UUID，`service create` 自动写入；
+当前目录的 `RexETermHostUUID.txt` 选择默认 UUID，`service create` 自动写入；
 UUID 对应的宿主记录、私有 token 和 socket/管道定位保存在二进制旁 `.rexeterm-socket/`。
-配置仍默认从创建命令的 cwd/.rexeterm/config-dir 选择。详见 [原生 IPC](cli-ipc.md)和 [Agent CLI](agent-cli.md)。
+宿主状态默认在创建命令的 `.rexeterm-config/`；各项目的保存条目和偏好在 `.rexeterm/config-dir/`。详见 [原生 IPC](cli-ipc.md)和 [Agent CLI](agent-cli.md)。
 `--host-binary` 和 HTTP 形式的 `api METHOD PATH` 不再使用。
 
 ## 可选普通 HTTP 适配器
@@ -64,26 +64,17 @@ RE 连接的 TLS 配置独立，见 [RE 认证](../../rexed/docs/authentication.
 不同请求复用 key 返回 `409`。最多保存 256 项、10 分钟。
 请求中断后的未知结果也保留占位，重试不会再次执行，调用方应查询资源确认结果。
 
-```bash
-rexeterm api hosts.save \
-  --body '{"id":"node","name":"Linux","url":"tls://re.example.test:45957","root":"/home/alice","username":"alice","connectionProfile":"/private/alice.json"}'
-rexeterm connect node
-rexeterm run node 'printf hello; sleep 10'
-rexeterm tasks node
-rexeterm pty node <asyncID>
-```
-
 任务创建可设置 `mode`（`shell` 或 `run`）、`io`（`pty` 默认，或 `stdio`）、`command`、
 `cwd`、`timeoutMs`、`readTimeoutMs`、`title`、`description`、`shell`，以及 stdio 专用 `stdin`、`keepStdin`。
 标题最多 40 个 Unicode 字符、默认“未命名”，描述最多 200 个字符、默认空；
 空白标题归一为“未命名”。stdio 和 PTY 共用任务元数据，创建结果、状态、列表和宿主完成历史
 均保留顶层 `title`、`description`。
-HTTP 默认首次读取 0 ms，CLI 的 run 默认 stdio 并读取 1000 ms。
+HTTP 和 CLI 默认首次读取 0 ms；CLI 的 `--cmd` 默认使用 stdio。
 PTY WebSocket 二进制帧传输入/输出，文本帧仅控制和元数据。
 客户端控制消息是 `{"type":"resize","cols":120,"rows":30}` 或 `{"type":"request_control"}`。
 PTY WebSocket 是 HTTP/GUI 实时入口。CLI 每次输出一份 Markdown 后退出，
-不打开交互 viewer；`task read` 读 daemon 的客户端缓冲（缓冲为空时才发有限 Exbash attach），
-`task input` 仍使用有限 Exbash attach。详见 [Agent CLI](agent-cli.md)。
+不打开交互 viewer；`-A ASYNCID` 从 daemon 的缓冲游标继续读；`-A ASYNCID --read` 重放保留的输出。
+输入用 `-A ASYNCID --text TEXT`。详见 [Agent CLI](agent-cli.md)。
 关闭 HTTP 适配器不关闭宿主 AppCore；最终关闭宿主才释放连接与运行资源。
 
 ## 文件与容量
@@ -93,8 +84,8 @@ PTY WebSocket 是 HTTP/GUI 实时入口。CLI 每次输出一份 Markdown 后退
 可提供 `overwrite`、`sha256`、`title`（40 字符）与 `description`（200 字符）。
 
 ```bash
-rexeterm upload node ./local.bin /tmp/remote.bin
-rexeterm download node /tmp/remote.bin ./copy.bin
+rexeterm -e node file upload /tmp/remote.bin ./local.bin
+rexeterm -e node file download /tmp/remote.bin ./copy.bin
 ```
 
 HTTP 文件内容在宿主私有临时目录流式暂存，RE 侧始终走统一文件数据通道。

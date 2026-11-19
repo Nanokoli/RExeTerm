@@ -304,7 +304,8 @@ async fn serve_data(
     }
     let is_pty = matches!(
         serde_json::from_str::<crate::protocol::terminal::ClientText>(&text),
-        Ok(crate::protocol::terminal::ClientText::Hello { .. })
+        Ok(crate::protocol::terminal::ClientText::Hello { .. }
+            | crate::protocol::terminal::ClientText::Observe { .. })
     );
     let _channel = is_pty.then(|| {
         executor.registry.channel(

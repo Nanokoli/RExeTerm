@@ -47,6 +47,7 @@ Client 接受本地连接，经选定传输链路送到 rexed，再由 rexed 打
 `listen` 是 Client 所在机器的 TCP 地址，可加 `tcp://`；省略时绑定 `127.0.0.1:0`。
 `target.address` 在 rexed 所在机器解析。`kind: "unix"` 使用远端 Unix 路径；其他类型需要注入 `StreamOpener`。
 `maxConnections` 为 1～1024，默认采用端点 `channels.forward`，同时受该端点通道总限额约束。
+可传 `forwardID` 指定客户端内唯一的名称，限 1～256 个 ASCII 字母、数字、连字符、下划线或点。省略时自动生成 `forward-N`。
 
 结果的 `metadata` 包含 `forwardID`、实际 `listen`、`executor`、`target` 和 `maxConnections`。
 开始只建立本地监听器；接收到本地连接后才打开远端目标。目标不可达时关闭该本地连接，并将错误记入 `lastError`。

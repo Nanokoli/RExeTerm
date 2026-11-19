@@ -5,27 +5,35 @@
 `rexeterm` 同时提供单次 Agent 命令和常驻 `daemon` 模式。只需分发这一个二进制，
 `service create/start` 以当前可执行文件启动独立后台进程，运行身份显示为 `rexetermd`。
 Linux 进程显示名称会改变，系统用户不改变；Windows 映像名称仍为 `rexeterm.exe`。
-业务调用复用 daemon 的 AppCore、RE 身份和偏好，每次返回一份 Markdown 后退出。
+业务调用复用 daemon 的 AppCore 与连接；CLI 自己读取项目偏好，默认返回一份 Markdown 后退出。
+`--tui` 直接打印 daemon 生成的彩色终端快照。
 
 ## 内部结构
 
 [main.rs](../../crates/cli/src/main.rs) 区分长期 daemon 与短期调用，统一错误和输出；
 [commands.rs](../../crates/cli/src/commands.rs) 定义命令并映射原生 IPC 操作；
-[markdown.rs](../../crates/cli/src/markdown.rs) 隔离终端控制字符，并用 `___` 块（而非代码围栏）承载 payload 文本。
+[markdown.rs](../../crates/cli/src/markdown.rs) 将结果字段直接列成 Markdown 列表，隔离终端控制字符，并用 `___` 块承载输出文本。
 [services.rs](../../crates/cli/src/services.rs) 负责当前程序的后台启动、选择、列举和停止。
 
 [cli-host](../../crates/cli-host/src/lib.rs) 负责 UUID64、boot ID、私有注册表和配置进程锁；
 [ipc.rs](../../crates/cli-host/src/ipc.rs) 只处理帧、版本、长度上限和本地连接，不依赖 RE 或 Application。
 [ipc_client.rs](../../crates/cli/src/ipc_client.rs) 执行有限请求并验证宿主身份。
-CLI 的 `ipc-client` 库 feature 保持无 AppCore、RE 和 HTTP 依赖；产品二进制的 `daemon` feature
-才组合共享核心和 [host.rs](../../crates/cli/src/host.rs)。`local` feature 允许显式开启本地执行器。
+CLI 的 `ipc-client` 不使用 HTTP；产品二进制的 `daemon` feature 组合共享核心和 [host.rs](../../crates/cli/src/host.rs)。`local` feature 允许显式开启本地执行器。
 
 [host.rs](../../crates/cli/src/host.rs) 持有注册锁、Application、IPC 监听和最终关闭，
-并维护每个任务的客户端输出缓冲（`tasks.read`）——回放属于客户端，rexed 只负责连续送流：
-`run` 后按 `asyncID` 起一个后台 `attach` 泵，持续记录到任务停止或 `task stop`/`forget`，
+并为 stdio 任务记录后台 `attach` 收到的输出。`tasks.read` 使用 daemon 的 stdio 游标，`tasks.forget` 回收相应缓冲。
+
+[pty.rs](../../crates/cli/src/host/pty.rs) 为每个在线执行器与 `asyncID` 维护一条二进制输出流和一份终端状态。
+前台输入调用只使用其写入结果；屏幕不重复应用该调用返回的输出。
+[screen.rs](../../crates/cli/src/host/screen.rs) 解释终端控制字符，生成纯文字和彩色快照；
+[screenshot.rs](../../crates/cli/src/host/screenshot.rs) 对同一屏幕栅格生成 PNG。连续字节的回放单独保留最近 256 KiB。
+daemon 最多同时采集 64 条 PTY，保存 128 份屏幕，已完成记录在 30 分钟后回收。每个执行器的实时流和短 PTY RPC 各有独立通道限额。
+
 [transfers.rs](../../crates/cli/src/host/transfers.rs) 维护有限暂存任务，复用 Application 的传输能力。
 普通上传下载传递绝对本地路径，daemon 直接使用 RE 文件通道，文件内容不编码为 JSON 或 HTTP。
 分步上传先把源文件复制到私有暂存区；分步下载通过共享文件系统读取完成内容并原子发布。
+
+[routes.rs](../../crates/cli/src/host/routes.rs) 处理 `executor connect` 的跳板链。CLI 从项目配置解析各跳的连接选项，daemon 用已有的 RE 连接和回环 TCP 转发逐跳串联，只在进程内记录链所拥有的在线 ID 和转发 ID。每跳独立计时，完成转发准备和建连的上限为 60 秒。链的创建、断开和转发的增删在 daemon 中串行；回收时先关闭下游连接，再释放上游转发。
 
 [stdio.rs](../../crates/cli/src/stdio.rs) 是可选 JSONL 嵌入适配；
 [admin_view.rs](../../crates/cli/src/admin_view.rs) 是可选运维页面库。
@@ -34,14 +42,13 @@ CLI 的 `ipc-client` 库 feature 保持无 AppCore、RE 和 HTTP 依赖；产品
 ## 绑定与生命周期
 
 缺省注册表为二进制旁的 `.rexeterm-socket/`：`<boot-id>/` 下保存 UUID64 记录、
-私有 token，Unix socket 直接保存在根目录。当前目录的 `.rexeterm/binding` 只保存所选 UUID64。
+私有 token，Unix socket 直接保存在根目录。当前目录的 `RexETermHostUUID.txt` 只保存所选 UUID64。
 Windows 命名管道保存在内核，记录保存 `pipe://` 名称；禁止远程管道客户端，不监听 TCP。
 `--registry-dir` 可显式迁移映射和私有运行目录，不改变 cwd 绑定位置。Linux 长安装路径通过目录文件描述符寻址，socket 仍在同一目录。
 
-`service create` 自动生成或复用 UUID64 并写入当前目录的绑定；`bind` 选择已有宿主。
+`service create` 自动生成或复用 UUID64 并写入当前目录的绑定；`service bind` 选择已有宿主。
 不同 cwd 独立选择宿主，不搜索父目录或程序旁的旧默认绑定。
-显式 `--service-id` 优先，不读取或改写 cwd 绑定。配置默认从创建命令的 cwd/.rexeterm/config-dir 选择，
-绑定后所有调用使用该宿主已经保存的配置目录。
+显式 `--service-id` 优先，不读取或改写 cwd 绑定。宿主状态默认在创建目录的 `.rexeterm-config/`。CLI 条目和偏好仍按调用目录读取；凭证链接放入独立的 `credentials/`。
 
 UUID64 保留至系统重启；CLI 退出或 daemon 停止/重启不使其失效。
 配置目录进程锁防止重复宿主；异常退出后可重用 ID 并清理本服务遗留 socket。

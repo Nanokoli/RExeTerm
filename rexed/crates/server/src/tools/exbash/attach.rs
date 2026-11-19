@@ -202,6 +202,11 @@ async fn wait_attach_timeout(
                 Err(error) => return Err(error),
             }
         }
+        // Exiting can release the controller; that is a completed input, not
+        // another viewer taking control.
+        if manager.core().detail(async_id)?.exit_code.is_some() {
+            return Ok(bytes);
+        }
         if let Some(controller) = controller {
             let current = manager.controller_id(async_id);
             if current.as_deref() != Some(controller) {
@@ -210,9 +215,6 @@ async fn wait_attach_timeout(
             }
         }
 
-        if manager.core().detail(async_id)?.exit_code.is_some() {
-            return Ok(bytes);
-        }
         let now = time::Instant::now();
         if now >= deadline {
             return Ok(bytes);

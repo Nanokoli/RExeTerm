@@ -14,6 +14,9 @@ pub struct ExbashOptions {
     /// I/O backend. Existing callers retain PTY by default.
     #[serde(default)]
     pub io: Option<String>,
+    /// Leave the initial live subscription for a binary terminal observer.
+    #[serde(default, rename = "streamOutput")]
+    pub stream_output: bool,
     #[serde(default)]
     pub stdin: Option<String>,
     #[serde(default, rename = "keepStdin")]

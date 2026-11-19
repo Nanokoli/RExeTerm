@@ -4,7 +4,9 @@ mod terminal;
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use rexeterm_appcore::AppCore;
 use rexeterm_appcore::{
-    client::FileTransferOptions, data::file::TransferObserver, protocol::ExecutorRequest,
+    client::FileTransferOptions,
+    data::file::TransferObserver,
+    protocol::{ExecutorRequest, ExecutorResponse},
     transport::LinkFuture,
 };
 use serde::{Deserialize, Serialize};
@@ -75,12 +77,11 @@ struct TransferJob {
 
 impl Application {
     pub async fn new(core: AppCore, path: PathBuf, defaults: Workspace) -> Result<Arc<Self>> {
-        let mut workspace = storage::read(&path, defaults)?;
+        let workspace = storage::read(&path, defaults)?;
         ensure!(workspace.version == 1, "不支持的工作区版本");
         let mut ids = std::collections::HashSet::new();
-        for host in &mut workspace.hosts {
+        for host in &workspace.hosts {
             validate_host(host)?;
-            *host = storage::prepare(&path, host.clone())?;
             ensure!(ids.insert(host.id.clone()), "Host ID 重复");
         }
         if path.exists() || !workspace.hosts.is_empty() {
@@ -134,7 +135,7 @@ impl Application {
         ensure!(!self.stopping.load(Ordering::SeqCst), "应用正在退出");
         let _guard = self.connections.lock().await;
         self.host(id)?;
-        let settings = storage::prepare_management(&self.path, id, settings)?;
+        let settings = storage::prepare_management(settings)?;
         let mut state = self.workspace.lock().unwrap();
         let mut next = state.clone();
         let host = next
@@ -150,7 +151,7 @@ impl Application {
 
     pub fn save_host(&self, host: Host) -> Result<()> {
         validate_host(&host)?;
-        let host = storage::prepare(&self.path, host)?;
+        let host = storage::prepare(host)?;
         let mut state = self.workspace.lock().unwrap();
         ensure!(
             !state.hosts.iter().any(|h| h.id == host.id),
@@ -183,7 +184,7 @@ impl Application {
         if let Some(host) = replacement {
             ensure!(host.id == id, "Host ID 不可修改");
             validate_host(&host)?;
-            next.hosts[index] = storage::prepare(&self.path, host)?;
+            next.hosts[index] = storage::prepare(host)?;
         } else {
             next.hosts.remove(index);
             if next.last_host.as_deref() == Some(id) {
@@ -218,14 +219,15 @@ impl Application {
             .is_some_and(|nodes| nodes.iter().any(|node| node["id"] == id));
         if !connected {
             let mut params = match &host.connection_profile {
-                Some(path) => serde_json::from_slice::<Value>(
-                    &std::fs::read(path).context("无法读取连接认证配置")?,
-                )?,
+                Some(path) => rexeterm_appcore::config::load_connection_profile(path)
+                    .context("无法读取连接认证配置")?,
                 None => json!({}),
             };
             ensure!(params.is_object(), "连接配置必须是 JSON 对象");
             params["id"] = json!(id);
             params["url"] = json!(host.url);
+            // The loaded options go to the SDK, while persistence records the source path.
+            params["connectionProfile"] = json!(host.connection_profile);
             if let Some(username) = &host.username {
                 params["username"] = json!(username);
             }
@@ -252,20 +254,38 @@ impl Application {
         params: Value,
         directory: Option<&str>,
     ) -> Result<Value> {
+        let request = self.rpc_request(host, method, params, directory)?;
+        rpc_result(self.core().handle(request).await)
+    }
+
+    /// Use the shared task lifecycle while leaving screen presentation to the host.
+    pub async fn rpc_unrendered(
+        &self,
+        host: Option<&str>,
+        method: &str,
+        params: Value,
+        directory: Option<&str>,
+    ) -> Result<Value> {
+        let request = self.rpc_request(host, method, params, directory)?;
+        rpc_result(self.core().handle_unrendered(request).await)
+    }
+
+    fn rpc_request(
+        &self,
+        host: Option<&str>,
+        method: &str,
+        params: Value,
+        directory: Option<&str>,
+    ) -> Result<ExecutorRequest> {
         ensure!(!self.stopping.load(Ordering::SeqCst), "应用正在退出");
-        let response = self
-            .core()
-            .handle(ExecutorRequest {
-                id: json!(self.next.fetch_add(1, Ordering::Relaxed)),
-                method: method.into(),
-                params,
-                directory: directory.map(PathBuf::from),
-                executor: host.map(str::to_owned),
-                tool_timeout_ms: Some(12000),
-            })
-            .await;
-        ensure!(response.ok, "{}", response.error.unwrap_or_default());
-        Ok(response.result.unwrap_or(Value::Null))
+        Ok(ExecutorRequest {
+            id: json!(self.next.fetch_add(1, Ordering::Relaxed)),
+            method: method.into(),
+            params,
+            directory: directory.map(PathBuf::from),
+            executor: host.map(str::to_owned),
+            tool_timeout_ms: Some(12000),
+        })
     }
 
     pub async fn browse(&self, host: &str, path: &str, offset: usize) -> Result<Value> {
@@ -543,6 +563,11 @@ fn validate_host(host: &Host) -> Result<()> {
     );
     Ok(())
 }
+fn rpc_result(response: ExecutorResponse) -> Result<Value> {
+    ensure!(response.ok, "{}", response.error.unwrap_or_default());
+    Ok(response.result.unwrap_or(Value::Null))
+}
+
 fn output(value: &Value) -> String {
     value["output"]["text"]
         .as_str()

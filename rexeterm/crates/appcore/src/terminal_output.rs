@@ -1,4 +1,5 @@
-//! On-demand text presentation for MCP/CLI. GUI streams go directly to xterm.
+//! On-demand text presentation for shared RPC callers. The CLI host and
+//! desktop use their own continuous terminal streams.
 use crate::protocol::ExecutorResponse;
 use serde_json::{json, Value};
 

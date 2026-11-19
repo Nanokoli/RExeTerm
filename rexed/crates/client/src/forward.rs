@@ -4,7 +4,7 @@ use crate::{
     protocol::{forward::StreamTarget, tool_output, ToolResult},
     transport::{ChannelPool, Purpose},
 };
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use serde::Deserialize;
 use serde_json::json;
 use std::{
@@ -93,6 +93,16 @@ impl ForwardRegistry {
         endpoint: ExecutorEndpoint,
         options: ForwardOptions,
     ) -> Result<ToolResult> {
+        if let Some(id) = &options.id {
+            ensure!(
+                !id.is_empty()
+                    && id.len() <= 256
+                    && id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')),
+                "forwardID must be 1 to 256 letters, digits, hyphens, underscores or dots"
+            );
+        }
         let metadata = crate::protocol::management::ChannelMetadata {
             title: options.title.unwrap_or_else(|| "未命名".into()),
             description: options.description.unwrap_or_default(),
@@ -114,6 +124,23 @@ impl ForwardRegistry {
         }
         let listener = TcpListener::bind(listen).await?;
         let address = format!("tcp://{}", listener.local_addr()?);
+        let mut state = self.0.lock().unwrap();
+        let id = match options.id {
+            Some(id) => {
+                ensure!(
+                    !state.entries.contains_key(&id),
+                    "forward ID {id} is already in use"
+                );
+                id
+            }
+            None => loop {
+                state.next += 1;
+                let id = format!("forward-{}", state.next);
+                if !state.entries.contains_key(&id) {
+                    break id;
+                }
+            },
+        };
         let active = Arc::new(AtomicUsize::new(0));
         let error = Arc::new(Mutex::new(None));
         let task = spawn_listener(
@@ -128,9 +155,6 @@ impl ForwardRegistry {
             active.clone(),
             error.clone(),
         );
-        let mut state = self.0.lock().unwrap();
-        state.next += 1;
-        let id = format!("forward-{}", state.next);
         let response = json!({"forwardID":id,"executor":endpoint.id(),"listen":address,"target":target,"maxConnections":capacity,"title":metadata.title,"description":metadata.description});
         state.entries.insert(
             id,

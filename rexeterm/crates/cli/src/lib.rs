@@ -16,8 +16,7 @@ pub mod markdown;
 #[cfg(feature = "ipc-client")]
 pub mod preferences;
 #[cfg(feature = "ipc-client")]
-pub mod screenshot;
-#[cfg(feature = "ipc-client")]
 pub mod services;
 
+#[cfg(feature = "ipc-client")]
 pub use rexeterm_cli_host::directory;

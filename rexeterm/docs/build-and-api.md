@@ -23,7 +23,7 @@ cargo build -p rexeterm-app --no-default-features
 cargo xwin build --target x86_64-pc-windows-msvc -p rexeterm-desktop --features desktop --bin rexeterm
 
 # 既有辅助入口。
-cargo build -p rexeterm --bin rexeterm
+REXETERM_BUILD_ID=$(git rev-parse HEAD) cargo build --locked -p rexeterm-cli --bin rexeterm
 cargo build -p rexeterm --no-default-features --features admin --bin rexctl
 ```
 
@@ -61,7 +61,8 @@ daemon.shutdown().await;
 ## 检查
 
 ```bash
-bash scripts/check-boundaries.sh
+bash rexed/scripts/check-boundaries.sh
+bash rexeterm/scripts/check-boundaries.sh
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace --all-targets
@@ -75,7 +76,8 @@ cargo test --locked --workspace --all-targets --all-features
 桌面默认不创建本地执行器，文件传输使用统一 RE 数据通道。
 前端检查使用 `node --check app/frontend/app.js` 和 `node --test app/frontend/utils.test.mjs`。
 普通 HTTP API 作为独立库适配器保留；CLI 不依赖 HTTP。CLI 自启动 daemon，原生 IPC 支持 Unix socket 和 Windows 本机命名管道，UUID64 在系统重启后失效；尚未接入系统服务管理器。
-详见[HTTP 与 CLI 指南](http-api.md)。
+
+`REXETERM_BUILD_ID` 可在构建时写入来源标识，`info` 同时显示 CLI 与匹配宿主各自的 `buildId`。使用前按 [Agent CLI](agent-cli.md) 验证当前构建的语法；普通 HTTP 见 [HTTP 与 CLI 指南](http-api.md)。
 
 ## 相关文档
 

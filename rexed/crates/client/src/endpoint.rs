@@ -15,6 +15,7 @@ pub(super) struct ExecutorEndpoint {
     version: Option<String>,
     file_transfer: bool,
     client_shell_command: bool,
+    pty_output_stream: bool,
     file_transfer_protocol: Option<String>,
     remote_id: Option<String>,
     extra_links: Vec<String>,
@@ -118,6 +119,10 @@ impl ExecutorEndpoint {
             .get("clientShellCommand")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        self.pty_output_stream = capabilities
+            .get("ptyOutputStream")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         self.file_transfer = metadata
             .pointer("/capabilities/fileTransfer")
             .and_then(Value::as_bool)
@@ -201,6 +206,7 @@ impl ExecutorEndpoint {
             version: None,
             file_transfer: false,
             client_shell_command: false,
+            pty_output_stream: false,
             file_transfer_protocol: None,
         }
     }
@@ -224,6 +230,7 @@ impl ExecutorEndpoint {
                 ));
             }
             if self.client_shell_command != other.client_shell_command
+                || self.pty_output_stream != other.pty_output_stream
                 || self.stream_forward != other.stream_forward
                 || self.file_transfer_protocol != other.file_transfer_protocol
                 || self.file_transfer != other.file_transfer
@@ -296,6 +303,10 @@ impl ExecutorEndpoint {
         self.client_shell_command
     }
 
+    pub(super) fn supports_pty_output_stream(&self) -> bool {
+        self.pty_output_stream
+    }
+
     pub(super) fn id(&self) -> &str {
         &self.info.id
     }
@@ -313,6 +324,7 @@ impl ExecutorEndpoint {
             "version": self.version,
             "fileTransfer": self.file_transfer,
             "clientShellCommand": self.client_shell_command,
+            "ptyOutputStream": self.pty_output_stream,
             "fileTransferProtocol": self.file_transfer_protocol,
             "links": self.pool.as_ref().map(|pool|pool.targets()),
             "channels": self.limits,

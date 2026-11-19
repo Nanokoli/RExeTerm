@@ -231,6 +231,7 @@ impl Executor {
                 "stdioExecution": true,
                 "fileTransfer": true,
                 "clientShellCommand": true,
+                "ptyOutputStream": true,
                 "streamForward": true,
                 "clientSessions": true,
                 "clientIsolation": true,

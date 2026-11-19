@@ -9,6 +9,9 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
+#[path = "support/mcp_http.rs"]
+mod wire;
+
 #[cfg(unix)]
 fn terminal_data(packet: &[u8]) -> Vec<&[u8]> {
     assert_eq!(&packet[..4], b"RTP1");
@@ -428,8 +431,6 @@ async fn terminal_input_progresses_while_preview_output_is_backpressured() {
 #[tokio::test]
 async fn tasks_are_scoped_to_this_client_and_shared_with_its_http_adapter() {
     use rexeterm::{app::McpHttpOptions, protocol::ExecutorRequest};
-    #[path = "support/mcp_http.rs"]
-    mod wire;
     let root = tempfile::tempdir().unwrap();
     let first = setup(root.path()).await;
     let saved: Workspace =

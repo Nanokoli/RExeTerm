@@ -6,24 +6,47 @@ use super::{
 use crate::{
     context::ToolContext,
     protocol::{tool_output, tool_output_full, ToolResult},
-    shell_manager::ShellManager,
+    shell_manager::{PendingOutput, ShellManager},
 };
 use anyhow::{anyhow, Result};
-use remote_executor_terminal::session::OutputSubscription;
+use remote_executor_terminal::session::{OutputSubscription, Session};
 use remote_executor_terminal::CommandSpec;
 use serde_json::json;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tokio::time;
 const READ_TIMEOUT: u64 = 10_000;
 pub(super) struct StartedJob {
     pub(super) manager: ShellManager,
     pub(super) async_id: String,
     pub(super) timeout: Option<i64>,
+    session: Arc<Session>,
     output: OutputSubscription,
     observed: super::capture::OutputCapture,
 }
 pub(super) async fn run_command(options: ExbashOptions, ctx: &ToolContext) -> Result<ToolResult> {
     let read_timeout = options.read_timeout.unwrap_or(READ_TIMEOUT);
+    if options.stream_output {
+        let slot = manager(ctx)?.reserve_output_slot()?;
+        let job = start_job(&options, ctx).await?;
+        let mut metadata =
+            serde_json::to_value(run_detail(&job.manager, &job.async_id, job.timeout)?)?;
+        let size = job.session.terminal_size();
+        metadata["terminalSize"] = json!({"cols":size.cols,"rows":size.rows});
+        metadata["ptyOutputStream"] = json!(true);
+        job.manager.reserve_output(
+            &job.async_id,
+            slot,
+            PendingOutput {
+                session: job.session,
+                output: job.output,
+                size,
+            },
+        );
+        return Ok(ToolResult {
+            metadata,
+            output: tool_output(""),
+        });
+    }
     let mut job = start_job(&options, ctx).await?;
     if let Some((detail, output)) = wait_for_stop_with_output(&mut job, read_timeout).await? {
         let mut size = super::terminal_size(&job.manager, &job.async_id)?;
@@ -103,6 +126,7 @@ pub(super) async fn start_job(options: &ExbashOptions, ctx: &ToolContext) -> Res
         manager,
         async_id: id,
         timeout: options.timeout,
+        session,
         output,
         observed: Default::default(),
     })

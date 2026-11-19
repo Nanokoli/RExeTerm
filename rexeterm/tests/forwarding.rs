@@ -18,6 +18,10 @@ use tokio::{
     net::{TcpListener, TcpStream},
     time::timeout,
 };
+
+#[path = "support/re_session.rs"]
+mod session;
+
 fn options(url: String) -> ConnectExecutorOptions {
     ConnectExecutorOptions {
         authentication: None,
@@ -379,8 +383,6 @@ async fn custom_device_target_uses_the_same_data_bridge() {
 }
 #[tokio::test]
 async fn unsupported_datagram_target_returns_a_handshake_error() {
-    #[path = "support/re_session.rs"]
-    mod session;
     let url = start_executor(
         "tcp://127.0.0.1:0",
         Executor::local("node"),

@@ -7,6 +7,11 @@ use rexeterm::{
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+
+#[cfg(feature = "mcp-http")]
+#[path = "support/mcp_http.rs"]
+mod wire;
+
 fn endpoint(url: String) -> ConnectExecutorOptions {
     ConnectExecutorOptions {
         authentication: None,
@@ -88,8 +93,8 @@ async fn a_new_core_with_the_same_private_identity_store_recovers_server_task_in
         call(&other, json!({"mode":"list"})).await["runs"],
         json!([])
     );
-    let identity_file =
-        rexeterm::appcore::config::executor_directory(root.path(), "node").join("identities.json");
+    let identity_file = rexeterm::appcore::config::credential_directory(root.path(), "node")
+        .join("identities.json");
     assert!(identity_file.is_file());
     #[cfg(unix)]
     {
@@ -117,8 +122,6 @@ async fn mcp_transparently_passes_task_file_and_forward_titles_and_descriptions(
         net::{TcpListener, TcpStream},
         time::{timeout, Duration},
     };
-    #[path = "support/mcp_http.rs"]
-    mod wire;
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source");
     let target = root.path().join("target");

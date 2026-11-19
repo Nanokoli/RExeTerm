@@ -1,10 +1,8 @@
-//! Rasterise a client-side terminal screen into a PNG.
-//!
-//! rexeterm holds the pty screen (vt100 output already reduced to
-//! `client-screen-v1` text), so a screenshot needs no terminal attached.
+//! Rasterize the daemon's current viewport, including cell styles.
+use super::screen::Viewport;
 use anyhow::{anyhow, bail, Result};
 use fontdue::{Font, FontSettings};
-use std::path::Path;
+use std::{path::Path, sync::OnceLock};
 
 /// Monospace font, in preference order.
 const MONO_FONTS: [&str; 6] = [
@@ -16,7 +14,7 @@ const MONO_FONTS: [&str; 6] = [
     "C:/Windows/Fonts/cour.ttf",
 ];
 /// Noto Sans Mono CJK SC subset: GB2312 + ASCII + TUI symbols (OFL 1.1, assets/LICENSE-NotoSansSC.txt).
-static EMBEDDED_CJK: &[u8] = include_bytes!("../assets/NotoMonoSC-Subset.otf");
+static EMBEDDED_CJK: &[u8] = include_bytes!("../../assets/NotoMonoSC-Subset.otf");
 
 /// Fallbacks for characters the monospace face does not cover (CJK, symbols).
 const FALLBACK_FONTS: [&str; 8] = [
@@ -37,30 +35,9 @@ const PADDING: usize = 6;
 /// Coverage above this becomes ink (nearest neighbour, no blending).
 const COVERAGE: u8 = 128;
 
-#[derive(Clone, Copy)]
-struct Style {
-    fg: [u8; 3],
-    bg: Option<[u8; 3]>,
-    bold: bool,
-}
+type Rgb = [u8; 3];
 
-impl Default for Style {
-    fn default() -> Self {
-        Self {
-            fg: [FOREGROUND, FOREGROUND, FOREGROUND],
-            bg: None,
-            bold: false,
-        }
-    }
-}
-
-/// ANSI 256-colour palette entry, or `#rrggbb`.
-fn parse_color(text: &str) -> Option<[u8; 3]> {
-    if let Some(hex) = text.strip_prefix('#') {
-        let value = u32::from_str_radix(hex, 16).ok()?;
-        return Some([(value >> 16) as u8, (value >> 8) as u8, value as u8]);
-    }
-    let index: u8 = text.parse().ok()?;
+fn indexed_color(index: u8) -> Rgb {
     const BASE: [[u8; 3]; 16] = [
         [0x00, 0x00, 0x00],
         [0xcd, 0x31, 0x31],
@@ -80,30 +57,28 @@ fn parse_color(text: &str) -> Option<[u8; 3]> {
         [0xff, 0xff, 0xff],
     ];
     if index < 16 {
-        return Some(BASE[index as usize]);
+        return BASE[index as usize];
     }
     if index < 232 {
         let index = index - 16;
         let steps = [0u8, 0x5f, 0x87, 0xaf, 0xd7, 0xff];
-        return Some([
+        return [
             steps[(index / 36) as usize],
             steps[((index % 36) / 6) as usize],
             steps[(index % 6) as usize],
-        ]);
+        ];
     }
     let level = 8 + (index - 232) * 10;
-    Some([level, level, level])
+    [level, level, level]
 }
 
-fn vt_color(color: Option<avt::Color>) -> Option<[u8; 3]> {
+fn vt_color(color: Option<avt::Color>) -> Option<Rgb> {
     match color? {
-        avt::Color::Indexed(index) => parse_color(&index.to_string()),
+        avt::Color::Indexed(index) => Some(indexed_color(index)),
         avt::Color::RGB(rgb) => Some([rgb.r, rgb.g, rgb.b]),
     }
 }
 
-/// Replay the pty transcript through vt100: the terminal, not the text, owns
-/// colours, cursor moves and erases.
 /// Which edges a box-drawing character connects: up, down, left, right.
 fn box_edges(ch: char) -> Option<[bool; 4]> {
     Some(match ch {
@@ -174,52 +149,6 @@ fn draw_box(
     }
 }
 
-fn screen_grid(text: &str, rows: usize, cols: usize) -> (Vec<String>, Vec<Vec<Style>>) {
-    // Flattened screens are LF separated; a bare LF keeps the column, so make
-    // every line start at column 0 before replaying.
-    let mut normalized = String::with_capacity(text.len() + 16);
-    for ch in text.chars() {
-        if ch == '\n' {
-            normalized.push('\r');
-        }
-        normalized.push(ch);
-    }
-    // avt owns the terminal state, including DEC line drawing and wide cells.
-    let mut terminal = avt::Terminal::new(cols, rows).expect("terminal size is non-zero");
-    terminal.feed(normalized.as_str());
-    let mut lines = Vec::with_capacity(rows);
-    let mut grid = vec![vec![Style::default(); cols]; rows];
-    for (row, line) in terminal.screen().visible_lines().take(rows).enumerate() {
-        let mut text = String::new();
-        let mut col = 0;
-        for cell in line.cells() {
-            let width = cell.width().max(1) as usize;
-            if col >= cols {
-                break;
-            }
-            text.push(cell.char());
-            let pen = cell.pen();
-            let mut fg = vt_color(pen.foreground());
-            let mut bg = vt_color(pen.background());
-            if pen.is_inverse() {
-                std::mem::swap(&mut fg, &mut bg);
-            }
-            let style = &mut grid[row][col];
-            if let Some(fg) = fg {
-                style.fg = fg;
-            }
-            style.bg = bg;
-            style.bold = pen.is_bold();
-            col += width;
-        }
-        lines.push(text.trim_end().to_string());
-    }
-    while lines.last().is_some_and(String::is_empty) {
-        lines.pop();
-    }
-    (lines, grid)
-}
-
 fn load(path: &str) -> Option<Font> {
     if !Path::new(path).exists() {
         return None;
@@ -284,9 +213,12 @@ fn glyph(fonts: &[Font], ch: char) -> Option<&Font> {
         .or_else(|| fonts.first())
 }
 
-/// Render `text` as a `cols` x `rows` terminal screenshot.
-pub fn screen_png(text: &str, cols: u16, rows: u16) -> Result<Vec<u8>> {
-    let fonts = load_fonts()?;
+pub(super) fn screen_png(screen: &Viewport) -> Result<Vec<u8>> {
+    static FONTS: OnceLock<Result<Vec<Font>, String>> = OnceLock::new();
+    let fonts = FONTS
+        .get_or_init(|| load_fonts().map_err(|error| error.to_string()))
+        .as_ref()
+        .map_err(|message| anyhow!("{message}"))?;
     let primary = &fonts[0];
     let line = primary
         .horizontal_line_metrics(FONT_SIZE)
@@ -303,45 +235,46 @@ pub fn screen_png(text: &str, cols: u16, rows: u16) -> Result<Vec<u8>> {
         .horizontal_line_metrics(FONT_SIZE)
         .map(|metrics| (metrics.ascent, metrics.descent))
         .unwrap_or((FONT_SIZE * 0.8, FONT_SIZE * 0.2));
-    let cols = cols.max(1) as usize;
-    let rows = rows.max(1) as usize;
-    let width = cols * cell_width + PADDING * 2;
-    let height = rows * cell_height + PADDING * 2;
-    let mut canvas = vec![0u8; width * height * 4];
+    let width = screen.cols * cell_width + PADDING * 2;
+    let height = screen.rows * cell_height + PADDING * 2;
+    let pixels = width
+        .checked_mul(height)
+        .filter(|pixels| *pixels <= 12_000_000)
+        .ok_or_else(|| anyhow!("PTY screenshot exceeds the pixel budget"))?;
+    let mut canvas = vec![0u8; pixels * 4];
+    let default_bg = [BACKGROUND; 3];
     for pixel in canvas.as_chunks_mut::<4>().0 {
         *pixel = [BACKGROUND, BACKGROUND, BACKGROUND, 0xff];
     }
-    let (lines, styles) = screen_grid(text, rows, cols);
-    for (row, line) in styles.iter().enumerate() {
-        for (col, style) in line.iter().enumerate() {
-            let Some(bg) = style.bg else { continue };
+    // Paint backgrounds first, including the tail cell of wide characters.
+    for (row, line) in screen.cells.iter().enumerate() {
+        for (col, cell) in line.iter().enumerate() {
+            let (_, bg) = colors(cell.pen());
+            if bg == default_bg {
+                continue;
+            }
             let x0 = PADDING + col * cell_width;
             let y0 = PADDING + row * cell_height;
-            for y in y0..(y0 + cell_height).min(height) {
-                for x in x0..(x0 + cell_width).min(width) {
-                    let index = (y * width + x) * 4;
-                    canvas[index..index + 3].copy_from_slice(&bg);
+            for y in y0..y0 + cell_height {
+                for x in x0..x0 + cell_width {
+                    fill(&mut canvas, width, height, x as i32, y as i32, bg);
                 }
             }
         }
     }
-    for (row, line_text) in lines.iter().take(rows).enumerate() {
-        let mut col = 0;
-        for ch in line_text.chars() {
-            if col >= cols {
-                break;
-            }
-            if ch == ' ' {
-                col += 1;
-                continue;
-            }
-            // Box drawing is geometry, not a glyph: the font may not carry it.
+    for (row, line) in screen.cells.iter().enumerate() {
+        for (col, cell) in line
+            .iter()
+            .enumerate()
+            .filter(|(_, cell)| cell.width() != 0)
+        {
+            let pen = cell.pen();
+            let (fg, _) = colors(pen);
+            let x0 = (PADDING + col * cell_width) as i32;
+            let y0 = (PADDING + row * cell_height) as i32;
+            let ch = cell.char();
             if let Some(edges) = box_edges(ch) {
-                let style = styles[row][col];
-                let fg = style.fg;
-                let x0 = PADDING as i32 + (col * cell_width) as i32;
-                let y0 = PADDING as i32 + (row * cell_height) as i32;
-                let thickness = (cell_width as i32 / 10).max(1);
+                let thickness = if pen.is_bold() { 2 } else { 1 };
                 draw_box(
                     &mut canvas,
                     width,
@@ -354,41 +287,44 @@ pub fn screen_png(text: &str, cols: u16, rows: u16) -> Result<Vec<u8>> {
                     fg,
                     thickness,
                 );
-                col += 1;
-                continue;
-            }
-            let Some(font) = glyph(&fonts, ch) else {
-                col += 1;
-                continue;
-            };
-            let style = styles[row][col];
-            let metrics = font.metrics(ch, FONT_SIZE);
-            let wide = metrics.advance_width > cell_width as f32 * 1.5;
-            let (metrics, bitmap) = font.rasterize(ch, FONT_SIZE);
-            let cells = if wide { 2 } else { 1 };
-            let slot = cells * cell_width;
-            let left = PADDING as i32 + (col * cell_width) as i32 + metrics.xmin;
-            let cell_top = PADDING as i32 + (row * cell_height) as i32;
-            let baseline =
-                cell_top + ((cell_height as f32 + ascent + descent) / 2.0).round() as i32;
-            let top = baseline - metrics.height as i32 - metrics.ymin;
-            // Nearest neighbour: a coverage sample is either ink or hole, never
-            // a blend, so glyphs stay crisp and pixel-exact at cell scale.
-            for (gy, chunk) in bitmap.chunks(metrics.width.max(1)).enumerate() {
-                for (gx, alpha) in chunk.iter().enumerate() {
-                    if *alpha < COVERAGE {
-                        continue;
+            } else if ch != ' ' {
+                if let Some(font) = glyph(fonts, ch) {
+                    let (metrics, bitmap) = font.rasterize(ch, FONT_SIZE);
+                    let left = x0 + metrics.xmin;
+                    let baseline =
+                        y0 + ((cell_height as f32 + ascent + descent) / 2.0).round() as i32;
+                    let top = baseline - metrics.height as i32 - metrics.ymin;
+                    for (gy, chunk) in bitmap.chunks(metrics.width.max(1)).enumerate() {
+                        for (gx, alpha) in chunk.iter().enumerate() {
+                            if *alpha >= COVERAGE {
+                                let x = left + gx as i32;
+                                let y = top + gy as i32;
+                                fill(&mut canvas, width, height, x, y, fg);
+                                if pen.is_bold() {
+                                    fill(&mut canvas, width, height, x + 1, y, fg);
+                                }
+                            }
+                        }
                     }
-                    let x = left + gx as i32;
-                    let y = top + gy as i32;
-                    if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
-                        continue;
-                    }
-                    let index = (y as usize * width + x as usize) * 4;
-                    canvas[index..index + 3].copy_from_slice(&style.fg);
                 }
             }
-            col += cells.min(slot / cell_width);
+            for (enabled, offset) in [
+                (pen.is_underline(), cell_height.saturating_sub(2)),
+                (pen.is_strikethrough(), cell_height / 2),
+            ] {
+                if enabled {
+                    for col in 0..cell_width * usize::from(cell.width()) {
+                        fill(
+                            &mut canvas,
+                            width,
+                            height,
+                            x0 + col as i32,
+                            y0 + offset as i32,
+                            fg,
+                        );
+                    }
+                }
+            }
         }
     }
     let mut png_bytes = Vec::new();
@@ -404,28 +340,12 @@ pub fn screen_png(text: &str, cols: u16, rows: u16) -> Result<Vec<u8>> {
     Ok(png_bytes)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn screen_becomes_a_png_of_the_asked_size() {
-        let png_bytes = screen_png("hello\nworld", 20, 4).expect("png");
-        assert!(png_bytes.starts_with(b"\x89PNG"), "png signature");
-        let reader = png::Decoder::new(std::io::Cursor::new(&png_bytes));
-        let reader = reader.read_info().expect("read info");
-        let info = reader.info();
-        assert!(
-            info.height > 4 * 15,
-            "rows * cell + padding: {}",
-            info.height
-        );
-        assert!(info.width > 20 * 8, "cols * cell + padding: {}", info.width);
-    }
-
-    #[test]
-    fn unknown_characters_do_not_panic() {
-        let png_bytes = screen_png("中文\t测试\x1b", 10, 2).expect("png");
-        assert!(png_bytes.starts_with(b"\x89PNG"));
+fn colors(pen: &avt::Pen) -> (Rgb, Rgb) {
+    let fg = vt_color(pen.foreground()).unwrap_or([FOREGROUND; 3]);
+    let bg = vt_color(pen.background()).unwrap_or([BACKGROUND; 3]);
+    if pen.is_inverse() {
+        (bg, fg)
+    } else {
+        (fg, bg)
     }
 }

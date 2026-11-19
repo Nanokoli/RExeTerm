@@ -1,11 +1,11 @@
 //! Project preferences belong to the CLI: it reads and writes
 //! `<cwd>/.rexeterm/config-dir/preferences.json` itself and sends the resolved
 //! shell with every task, so the host never needs to know this file exists.
-use crate::ipc_client::IpcClient;
+use crate::{executors::Inventory, ipc_client::IpcClient};
 use anyhow::{Context, Result};
 use rexeterm_appcore::preferences::ClientSettingsStore;
 use serde_json::{json, Value};
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 
 /// Executor facts the CLI needs to resolve a shell command on its own.
 #[derive(Clone, Debug, Default)]
@@ -22,26 +22,15 @@ pub fn directory() -> Result<PathBuf> {
 }
 
 pub fn store() -> Result<ClientSettingsStore> {
-    let directory = directory()?;
-    fs::create_dir_all(&directory)
-        .with_context(|| format!("cannot create {}", directory.display()))?;
-    ClientSettingsStore::load(directory.join("preferences.json"))
+    ClientSettingsStore::load_cli(directory()?.join("preferences.json"))
 }
 
 /// Ask the bound host what the executor runs on; `auto` needs it.
 pub async fn executor_facts(client: &IpcClient, host: &str) -> Result<ExecutorFacts> {
-    let value = client
-        .call("rpc", json!({"tool":"list_executor","params":{}}))
-        .await?;
-    let executors = value["metadata"]["executors"]
-        .as_array()
-        .or_else(|| value["executors"].as_array())
-        .cloned()
-        .unwrap_or_default();
-    let entry = executors
-        .iter()
-        .find(|entry| entry["id"].as_str() == Some(host))
-        .with_context(|| format!("executor {host} is not connected"))?;
+    let inventory = Inventory::live(client).await?;
+    let entry = inventory.find(host).with_context(|| {
+        format!("executor {host} is not connected to this service; check info and executor list")
+    })?;
     Ok(ExecutorFacts {
         system: entry["system"].as_str().map(str::to_owned),
         client_shell_command: entry["clientShellCommand"].as_bool().unwrap_or(false),

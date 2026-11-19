@@ -185,7 +185,7 @@ fn profile(host: &Host) -> Result<Value> {
         .as_ref()
         .and_then(|m| m.connection_profile.as_ref());
     let mut value = match custom.or(host.connection_profile.as_ref()) {
-        Some(path) => serde_json::from_slice::<Value>(&std::fs::read(path)?)?,
+        Some(path) => rexeterm_appcore::config::load_connection_profile(path)?,
         None => json!({}),
     };
     ensure!(value.is_object(), "invalid management profile");

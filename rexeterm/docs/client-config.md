@@ -1,96 +1,65 @@
 # 客户端配置布局
 
-## 三方职责
+## CLI 的项目目录
 
-| 角色 | 负责 | 不负责 |
-| --- | --- | --- |
-| `rexetermd`（宿主） | 维护到 rexed 的连接、把 rexed 的流持续接住、维护到 CLI 的 IPC | 不读取任何偏好文件；不解析 shell；不写项目目录 |
-| `rexeterm` | 读取与写入 `.rexeterm/config-dir/preferences.json`、解析出完整 shell 命令并随任务下发 | 不管远端连接生命周期 |
-| `rexed` | 远端执行、连续送流 | 不管客户端偏好 |
+从当前工作目录读取配置；可用 `cd` 或 `REXETERM_CWD` 选择本机目录，`--rcwd` 指远端目录。
 
-## 配置与绑定
+```text
+<项目>/
+  RexETermHostUUID.txt                      # 当前项目选中的宿主 ID
+  .rexeterm/config-dir/
+    preferences.json                      # 客户端全局 shell 默认值
+    executors/
+      RB5/
+        executor.json                     # 一个保存的执行器：ID、名称、地址、浏览起点
+        preferences.json                  # 此执行器的可选 shell 覆盖
+    credentials/
+      rb5-codex.json -> /private/HostNet/RB5/profile.json
+  .rexeterm-config/                        # daemon 的私有状态；与 CLI 保存条目独立
+```
 
-配置只属于 CLI，固定在当前工作目录的 `.rexeterm/config-dir/`，不接受任何参数覆盖。
-工作目录只能由外部决定：`cd`，或设 `REXETERM_CWD`（启动时切换，失败即退出 2）；
-`--rcwd` 只影响远端工作目录和它对应的偏好层。
+`-e -list_local`（`executor host list`）和 `-cr -list_local`（`credential list`）显示保存目录及条目位置。`-e -list_online` 显示选中宿主的活动连接。`-ec rb5-codex@RB5`（`executor connect rb5-codex@RB5`）使用 `@` 后保存的主机名 `RB5` 作为在线 ID。加上 `as rb5_codex_exe` 时，后续命令使用这个在线别名；本地条目仍叫 `RB5`。
 
-宿主是全机唯一的：binding 写在二进制旁 `.rexeterm-socket/binding`，`service create`
-发现已有存活宿主时直接复用（输出 `reused: true`），不会再起第二个。宿主的私有状态
-（`host/` 下的锁、日志、workspace）也在 `.rexeterm-socket/` 里，不落在任何项目中。
-`--registry-dir` 改变这些运行记录与 binding 的位置。
+凭证 profile 私下保存 `username`、`authentication`、`tls`；下面是证书认证的结构示例：
 
-因此：项目里只会出现 `.rexeterm/config-dir/`（CLI 的偏好），宿主与连接完全在项目之外。
-CLI 在任意目录都能用同一宿主；偏好按目录各自读取，改文件立即生效（宿主不缓存）。
+```json
+{
+  "username": "client-user",
+  "authentication": {"method": "certificate"},
+  "tls": {
+    "caFile": "server-cert.pem",
+    "certificateFile": "client-cert.pem",
+    "privateKeyFile": "client-key.pem"
+  }
+}
+```
 
-完整 App 只读取自身二进制旁的 `.rexeterm/config-dir/`，不跟随 cwd，不读取 APPDATA，
-也不再用 `REXETERM_CONFIG_PATH` 选择其他工作区。MCP 独立入口默认采用程序旁配置，
-保留其显式客户端配置文件参数。未开启持久化的嵌入 AppCore 仍可完全在内存运行。
+相对 PEM 路径以实际 profile 文件的目录为准（支持符号链接）。带 `-cr` 时从所选凭证读取用户名、认证和 TLS，连接地址、执行器 ID 及其它选项来自执行器条目。旧条目的 `connectionProfile` 是可选默认凭证来源；其中的 `id`、`url` 等可由条目覆盖。profile 自身的 `connectionProfile` 不会再递归读取。普通 CLI 输出不含认证对象、密码或私钥文件字段；`credential list` 只读文件元数据和链接目标。连接失败时可按提示核对具体字段和本机文件路径。
 
-## 按执行器分组
+已保存的旧 `executors/<ID>.json` 仍可读。`executor host edit` 为可移植 ID 写入新目录，优先读取新条目；原文件留作回退。修改时用 `--options` 设置公开配置字段，不把密码或 TLS 对象传入命令行。`executor host remove` 删除对应配置条目，保留独立凭证。旧哈希目录下的 CLI 偏好仍能读取，后续修改写入新目录。
+
+宿主运行记录、私有 IPC token 与套接字由 `--registry-dir`（默认程序旁 `.rexeterm-socket/`）管理。固定相同的 registry 才能解释 `RexETermHostUUID.txt` 中的 ID。详情见 [CLI 本机 IPC](cli-ipc.md)。
+
+## App / MCP 的配置
+
+完整 App 和 MCP 独立入口默认使用程序旁 `.rexeterm-config/`，MCP 仍可显式传客户端配置文件。App 与 MCP 不使用 CLI 的绑定或凭证名。同一配置根下，非凭证数据与凭证分别保存：
 
 ```text
 .rexeterm-config/
-  workspace.json                 # Host ID 索引、最后选择
-  preferences.json               # 客户端全局默认值
-  preferences.task-history.json  # 宿主有限任务结果，非输出日志
-  executors/
-    <SHA-256(执行器 ID)>/
-      executor.json              # ID、名称、地址、起始目录、选用用户与认证配置路径
-      connection.json            # 实际 SDK 连接选项及用户配置引用
-      preferences.json           # 该执行器默认 shell、精确目录覆盖
-      identities.json            # 此执行器各端点/RE 用户的客户端恢复凭据
-      identities.lock
-      management/               # GUI 独立运维认证，布局同 users/<hash>/authentication.json 与 keys/
-        users/
-          <SHA-256(RE 用户名)>/
-            authentication.json
-            keys/
-      users/
-        <SHA-256(RE 用户名)>/
-          authentication.json    # 登录方法、密码或证书选项
-          keys/
-            ca.pem
-            client-cert.pem
-            client-key.pem
+  workspace.json                          # Host ID 索引和最后选择
+  preferences.json                        # 全局偏好
+  preferences.task-history.json           # 有限的任务结果
+  executors/<SHA-256(执行器 ID)>/
+    executor.json                         # 保存的 Host 与外部 profile 路径
+    connection.json                       # 已准备的连接设置，凭证只保留引用
+    preferences.json                      # 此执行器的 shell 偏好
+  credentials/<SHA-256(执行器 ID)>/
+    identities.json                       # RE 会话恢复凭据
+    identities.lock
+    users/<SHA-256(RE 用户名)>/
+      authentication.json                # 仅保存直接传给 AppCore 的内联认证配置
 ```
 
-目录组件使用 ID 的完整 SHA-256，避免路径穿越、Windows 保留名称、大小写冲突和路径组件过长；
-文件内保留原始执行器 ID 和用户名。执行器级配置与用户配置均属于客户端，
-不修改远端 rexed 的用户、权限或认证政策。
+哈希将每个 ID 映射到一个目录，避免路径穿越、Windows 保留名和大小写碰撞；同一物理机器的不同 ID 仍分别保存。在 App 的 Host 与运维设置中选择外部 profile 路径，连接时读取原文件并解析 TLS 路径。这样可以直接指向 HostNet，也可在自己维护的 `credentials/` 中放私有 profile；证书和私钥不再自动复制。GUI 的独立运维 profile 保持和业务 profile 分开；没有独立 profile 时沿用业务 profile。
 
-保存 Host 时，将所选 connection profile 导入相应执行器/用户目录，
-同时复制引用的 TLS CA、客户端证书和私钥；相对 TLS 路径相对于源 profile 文件解析。
-原始外部 profile 和密钥不删除。后续连接使用导入副本；外部原文件改变后需重新导入。
-普通偏好工具与工作区 API 不返回密码、私钥或恢复 secret。
-
-配置以私有目录和原子文件替换保存：Unix 目录 0700、文件 0600；
-Windows 使用当前用户的受保护 DACL。程序目录不可写时 App 明确报错，不静默改用 cwd。
-删除 Host 仅从索引移除连接，保留该执行器的用户、密钥和偏好，避免重建 Host 时丢失认证数据。
-
-## GUI 的 Host 运维设置
-
-`executor.json` 的可选 `management` 对象保存 `target` 和 `connectionProfile`。
-`target` 留空时对网络业务地址尝试端口 + 1，保留协议、IPv6 和 WS 路径；不能推导本地 socket。
-该候选不代表服务端已监听；rexed 默认仍使用 Unix socket，网络管理监听需显式配置。
-`connectionProfile` 留空时继承 Host 业务 profile 和用户名；指定时使用该文件自身的用户名及认证。
-
-独立 profile 及证书/密钥导入 `executors/<hash>/management/users/<user-hash>/`，
-同名用户的业务凭据不会被管理员凭据覆盖。设置随 Host 持久保存，重启可恢复；旧 Host 缺省无独立设置。
-普通 HTTP/MCP 不增加全局运维查询入口。
-
-## 兼容与迁移
-
-同一显式配置根目录内的旧 workspace hosts 数组会转为 ID 索引和执行器文件。
-旧偏好文件里的 executors 覆盖会迁入各执行器目录；全局文件保留客户端默认值。
-旧集中 identities 文件在首次连接相应执行器时读取并复用原凭据，
-新凭据写入执行器目录。旧凭据文件保留，避免其他尚未重连的执行器失去身份。
-
-不自动搜索旧 APPDATA、任意工作目录或其他程序目录来合并配置。
-旧配置需要在同一配置根目录内迁移，App 部署时应先将旧配置复制到程序旁的新目录。
-显式宿主配置目录与 UUID64 运行注册表是两类存储；注册表仍按操作系统启动期隔离。
-
-## 相关文档
-
-- [Agent CLI](agent-cli.md)
-- [客户端偏好](modules/preferences.md)
-- [HTTP 宿主与绑定](http-api.md)
+已有 Host 指向旧的 `executors/<hash>/users/…/authentication.json` 时仍可连接。新会话恢复凭据写入 `credentials/`，优先复用旧的执行器或全局身份记录。运行时不会删除旧目录，也不会按 URL 自动合并别名。保存或删除 Host 不会删除外部 profile。私有配置使用原子替换，Unix 目录 0700、文件 0600；Windows 使用当前用户 ACL。

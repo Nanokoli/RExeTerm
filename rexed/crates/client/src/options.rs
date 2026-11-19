@@ -55,9 +55,10 @@ pub enum FileTransferMode {
     Upload,
 }
 
-/// Selected executor identity and the shell-command preparation capability.
+/// Selected executor identity and capabilities used to prepare requests.
 #[derive(Clone, Debug)]
 pub struct ExecutorSelection {
     pub info: crate::protocol::ExecutorInfo,
     pub client_shell_command: bool,
+    pub pty_output_stream: bool,
 }

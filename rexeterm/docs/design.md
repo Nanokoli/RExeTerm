@@ -2,7 +2,7 @@
 
 ## 范围
 
-入口包含 App、MCP stdio 和普通 HTTP 宿主。App 版包含完整界面，可在运行时开关 MCP HTTP；
+入口包含 App、MCP stdio 和单一 CLI/daemon 二进制；普通 HTTP 是可选适配库。App 版包含完整界面，可在运行时开关 MCP HTTP；
 stdio 版只提供普通 MCP，daemon 融合在同一进程。当前已实现 Windows Tauri 工作区预览。
 
 ## 架构
@@ -46,8 +46,10 @@ AppCore 无本地执行器、监听、stdio 或 Tauri 依赖；daemon 的 local 
 两个 MCP 适配器是独立 Cargo 包，可分别编译。stdio 产品的默认依赖不含 HTTP 和 AppHost。
 App 库默认具备 HTTP 模块，但监听仍需显式开启；禁用其 mcp-http feature 可去掉 HTTP 依赖。
 SDK 提供按节点断开；共享 Application 提供 Host 和文件任务，适配器不重复实现。
-Tauri command 连接 WebView 与进程内 Desktop；CLI 通过同一二进制的 daemon 模式创建和启停用户态宿主，使用原生 Unix socket / Windows 命名管道，按 cwd 的 `.rexeterm/binding` 或显式 UUID64 选择宿主；程序旁 `.rexeterm-socket/` 只维护映射、私有 token 与 IPC 定位记录。ID 保留到系统重启，GUI/MCP 不使用此目录绑定。系统服务安装仍未实现。
+Tauri command 连接 WebView 与进程内 Desktop；CLI 通过同一二进制的 daemon 模式创建和启停用户态宿主，使用原生 Unix socket / Windows 命名管道，按 cwd 的 `RexETermHostUUID.txt` 或显式 UUID64 选择宿主；程序旁 `.rexeterm-socket/` 只维护映射、私有 token 与 IPC 定位记录。ID 保留到系统重启，GUI/MCP 不使用此目录绑定。系统服务安装仍未实现。
 桌面包含 Host、文件树与属性、中心文件/任务 PTY 预览，以及任务、传输和转发三个底栏。
+CLI 的后台进程 `rexetermd` 负责从 RE 接收每个 PTY 的原始输出，保存当前屏幕，并按需生成文字、彩色终端快照或 PNG。
+短期进程 `rexeterm` 通过 IPC 发送输入、读取这些快照和保存输出文件。
 
 普通 HTTP 宿主和 GUI 复用 `crates/application` 的工作区与应用服务。
 任务历史由 AppCore 保存，完成任务的原生 PTY 在 RE 释放，见[生命周期说明](../../rexed/docs/lifecycle.md)。

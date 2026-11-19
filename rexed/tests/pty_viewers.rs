@@ -96,6 +96,72 @@ async fn until_bytes(connection: &mut TerminalConnection, marker: &[u8]) -> Vec<
     .await
     .unwrap()
 }
+
+#[tokio::test]
+async fn reserved_output_is_owned_one_shot_and_survives_fast_exit() {
+    let manager = ShellManager::default_shell(80, 24);
+    let url = start_executor("tcp://127.0.0.1:0", Executor::local("handoff"), manager)
+        .await
+        .unwrap();
+    let owner = client(&url, "alice").await;
+    let spectator = client(&url, "alice").await;
+    assert!(
+        owner
+            .selected_executor(None)
+            .await
+            .unwrap()
+            .pty_output_stream
+    );
+    let response = call(
+        &owner,
+        json!({
+            "mode":"run",
+            "command":r#"sh -c 'printf "\033[31mfirst\377"; exit 3'"#,
+            "streamOutput":true,
+        }),
+    )
+    .await;
+    assert!(response.ok, "{response:?}");
+    let result = response.result.unwrap();
+    assert_eq!(result["metadata"]["ptyOutputStream"], true);
+    assert_eq!(result["output"]["text"], "");
+    let id = result["metadata"]["asyncID"].as_str().unwrap();
+    let mut rejected = spectator.observe_terminal(None, id).await.unwrap();
+    assert!(matches!(
+        meta(&mut rejected).await,
+        ServerText::Error { .. }
+    ));
+    let mut stream = owner.observe_terminal(None, id).await.unwrap();
+    let (bytes, code) = timeout(Duration::from_secs(5), async {
+        let (mut bytes, mut code) = (Vec::new(), None);
+        loop {
+            match stream.link().recv().await.unwrap() {
+                Some(Frame::Binary(chunk)) => bytes.extend(chunk),
+                Some(Frame::Text(text)) => {
+                    match serde_json::from_str::<ServerText>(&text).unwrap() {
+                        ServerText::Meta {
+                            exit_code,
+                            read_only: true,
+                            ..
+                        } => code = exit_code,
+                        message => panic!("unexpected PTY metadata: {message:?}"),
+                    }
+                }
+                Some(Frame::Close) | None => break,
+            }
+        }
+        (bytes, code)
+    })
+    .await
+    .unwrap();
+    assert_eq!(bytes, b"\x1b[31mfirst\xff");
+    assert_eq!(code, Some(3));
+    let mut replay = owner.observe_terminal(None, id).await.unwrap();
+    assert!(matches!(meta(&mut replay).await, ServerText::Error { .. }));
+    owner.shutdown().await;
+    spectator.shutdown().await;
+}
+
 #[tokio::test]
 async fn known_same_user_pty_is_shared_read_only_without_expanding_lists_or_promoting_viewers() {
     for protocol in ["tcp", "ws"] {

@@ -8,7 +8,7 @@ use crate::{
         file::{self, TransferObserver},
         staged_file::StagedFile,
     },
-    protocol::file::{FileMessage, FileRequest, FileTransferResult},
+    protocol::file::{normalize_sha256, FileMessage, FileRequest, FileTransferResult},
     transport::{ChannelLease, Link, Purpose},
 };
 use anyhow::{anyhow, bail, Result};
@@ -17,11 +17,17 @@ use tokio::time::{timeout, Duration};
 impl ExecutorEndpoint {
     pub(super) async fn transfer_file(
         &self,
-        options: FileTransferOptions,
+        mut options: FileTransferOptions,
         directory: Option<&Path>,
         observer: Option<&dyn TransferObserver>,
     ) -> Result<FileTransferResult> {
         options.metadata.validate().map_err(anyhow::Error::msg)?;
+        options.sha256 = options
+            .sha256
+            .as_deref()
+            .map(normalize_sha256)
+            .transpose()
+            .map_err(anyhow::Error::msg)?;
         let pool = self.file_pool()?;
         let (mut link, lease) = timeout(Duration::from_secs(30), pool.connect(Purpose::File))
             .await
@@ -94,7 +100,7 @@ async fn transfer(
                         directory,
                         size: bytes,
                         overwrite: options.overwrite.unwrap_or(false),
-                        sha256: options.sha256,
+                        sha256: options.sha256.clone(),
                     },
                 },
             )
@@ -122,6 +128,14 @@ async fn transfer(
         bail!("file completion digest mismatch")
     }
     if let Some((stage, local)) = staging {
+        if let Some(expected) = options.sha256 {
+            if sent.sha256 != expected {
+                bail!(
+                    "download SHA-256 mismatch: expected {expected}, received {}",
+                    sent.sha256
+                );
+            }
+        }
         stage.commit(local).await?;
     }
     Ok(result)

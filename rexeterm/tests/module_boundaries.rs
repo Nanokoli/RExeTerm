@@ -9,6 +9,9 @@ use std::{collections::BTreeMap, fs, path::Path, time::Duration};
 use tempfile::tempdir;
 use tokio::time::timeout;
 
+#[path = "support/re_session.rs"]
+mod session;
+
 fn executor(id: &str) -> Executor {
     Executor::new(ExecutorInfo {
         id: id.to_string(),
@@ -102,8 +105,6 @@ async fn framed_upload_serializes_tool_writes_while_reads_continue() {
         },
         protocol::file::{FileMessage, FileRequest},
     };
-    #[path = "support/re_session.rs"]
-    mod session;
     let mut upload = session::bound_link(&format!("ws://{address}")).await;
     send_message(
         &mut upload,

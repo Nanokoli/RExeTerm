@@ -4,6 +4,15 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 pub const FILE_PROTOCOL: &str = "re.file.v2";
+
+/// Accept user input with or without the prefix and use the wire format internally.
+pub fn normalize_sha256(value: &str) -> Result<String, &'static str> {
+    let digest = value.strip_prefix("sha256:").unwrap_or(value);
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("expected 64 hexadecimal SHA-256 digits, optionally prefixed with sha256:");
+    }
+    Ok(format!("sha256:{}", digest.to_ascii_lowercase()))
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase", deny_unknown_fields)]
 pub enum FileRequest {

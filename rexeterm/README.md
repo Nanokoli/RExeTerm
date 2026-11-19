@@ -24,7 +24,7 @@ daemon 是共用后台模块。普通 HTTP 宿主提供 REST、二进制 PTY Web
 | crates/mcp-http-adapt | 可选 HTTP 监听和 MCP 协议会话，使用现有 AppCore |
 | crates/mcp-common | 两个适配器共用消息校验、工具声明和调用转换 |
 | crates/adapter-common | 有界消息读取和并发预算 |
-| crates/cli | UUID64 选择、Unix IPC/回环 HTTP CLI，以及可选 JSONL 和运维库 |
+| crates/cli | UUID64 选择、原生本机 IPC、执行器与凭证选择，以及可选 JSONL 和运维库 |
 | crates/cli-host | CLI 宿主发现、系统启动期 ID、目录绑定与宿主配置进程锁 |
 | crates/application | Host、浏览、搜索、文件任务和 GUI 终端预览 |
 | crates/http-adapt | 普通 REST、PTY WebSocket、SSE 与文件暂存 |
@@ -32,6 +32,8 @@ daemon 是共用后台模块。普通 HTTP 宿主提供 REST、二进制 PTY Web
 | app/frontend、app/src-tauri | 原生 Tauri 窗口与工作区前端 |
 
 ## 文档
+
+- [Agent CLI 快速开始](docs/agent-cli.md)
 
 - [设计总览](docs/design.md)
 - [构建与 API](docs/build-and-api.md)

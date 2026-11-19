@@ -22,14 +22,19 @@ pub fn new_client_credential() -> ClientCredential {
     ClientCredential { client_id, secret }
 }
 #[derive(Default)]
-pub(crate) struct MemoryCredentialStore(Mutex<BTreeMap<String, ClientCredential>>);
+pub(crate) struct MemoryCredentialStore(Mutex<BTreeMap<(String, String), ClientCredential>>);
 impl ClientCredentialStore for MemoryCredentialStore {
     fn load_or_create(&self, scope: &str) -> Result<ClientCredential> {
+        self.load_or_create_for("", scope)
+    }
+
+    fn load_or_create_for(&self, executor: &str, scope: &str) -> Result<ClientCredential> {
+        // Either alias can be disconnected independently when both dial the same RE host.
         Ok(self
             .0
             .lock()
             .unwrap()
-            .entry(scope.into())
+            .entry((executor.into(), scope.into()))
             .or_insert_with(new_client_credential)
             .clone())
     }

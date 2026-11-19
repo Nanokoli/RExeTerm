@@ -3499,6 +3499,7 @@ version = "0.2.13"
 dependencies = [
  "anyhow",
  "avt",
+ "base64 0.22.1",
  "clap",
  "fontdue",
  "futures-util",
@@ -3514,6 +3515,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "unicode-width",
+ "url",
 ]
 
 [[package]]

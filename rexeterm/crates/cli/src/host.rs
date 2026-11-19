@@ -1,10 +1,17 @@
 //! The host role: it links rexed to the CLI and owns no preferences. It runs
 //! from the same binary as the CLI (`rexeterm --daemon`), as a separate process.
+mod pty;
+mod routes;
+mod screen;
+mod screenshot;
 mod transfers;
 use anyhow::{anyhow, ensure, Result};
 use rexeterm_appcore::protocol::management::ClientHello;
 use rexeterm_application::{Application, Workspace};
-use rexeterm_cli::{directory, services::DaemonArgs};
+use rexeterm_cli::{
+    directory,
+    services::{self, DaemonArgs},
+};
 use rexeterm_cli_host::{
     ipc::{self, Request, Response},
     Registry,
@@ -30,9 +37,11 @@ struct State {
     token: String,
     stop: watch::Sender<bool>,
     stages: transfers::Transfers,
+    routes: Mutex<routes::Routes>,
     cache: Mutex<HashMap<String, Cached>>,
     outputs: OutputStore,
     pumps: Pumps,
+    terminals: pty::Terminals,
 }
 
 struct Cached {
@@ -40,7 +49,7 @@ struct Cached {
     created: Instant,
     outcome: Option<std::result::Result<Value, String>>,
 }
-/// Client-side replay buffer: rexeterm owns task output history, rexed only streams it.
+/// Daemon-owned replay budget per task.
 const OUTPUT_BUFFER_BYTES: usize = 256 * 1024;
 #[derive(Default)]
 struct OutputBuffer {
@@ -225,22 +234,16 @@ pub async fn run(
     let cwd = std::env::current_dir()?;
     directory::check(&cwd)?;
     let registry = Registry::open(registry_dir)?;
-    // The CLI wrote the UUID it wants; the host publishes it as the binding.
-    let explicit = id.is_some();
-    let requested = match id {
-        Some(id) => Some(rexeterm_cli_host::normalize_id(&id)?),
-        None => registry.read_uuid(),
-    };
-    // A host started without an explicit ID is the one that owns the binding.
-    let bind_default = !explicit;
-    let record = if let Some(id) = requested {
-        registry.resolve(&id)?
+    let selected = services::select(&cwd, id.as_deref())?;
+    let bind_default = selected.is_none();
+    let record = if let Some(selection) = selected {
+        registry.resolve(&selection.id)?
     } else {
         registry.reserve(
             &options
                 .config_dir
                 .clone()
-                .unwrap_or_else(|| cwd.join(".rexeterm")),
+                .unwrap_or_else(|| services::state_directory(&cwd)),
             options.local,
         )?
     };
@@ -291,9 +294,11 @@ pub async fn run(
         token,
         stop,
         stages: transfers::Transfers::new(registry.directory(), &record.id)?,
+        routes: Mutex::default(),
         cache: Mutex::new(HashMap::new()),
         outputs: OutputStore::default(),
         pumps: Arc::new(Mutex::new(HashMap::new())),
+        terminals: pty::Terminals::default(),
     });
     #[cfg(unix)]
     let listener = {
@@ -324,8 +329,7 @@ pub async fn run(
         (pipe, path)
     };
     if bind_default {
-        registry.write_binding(&record.id)?;
-        registry.clear_uuid();
+        rexeterm_cli_host::write_binding(&cwd, &record.id)?;
     }
     eprintln!(
         "role=rexetermd pid={} service={} ipc={}",
@@ -339,6 +343,11 @@ pub async fn run(
         _=stopped.changed()=>Ok(()),
     };
     state.stop.send_replace(true);
+    // Give downstream sessions a chance to close while their forwards still work.
+    let _ = tokio::time::timeout(Duration::from_secs(3), async {
+        state.routes.lock().await.shutdown(&app).await;
+    })
+    .await;
     let shutdown = app.shutdown().await;
     daemon.shutdown().await;
     result?;
@@ -391,7 +400,10 @@ async fn serve(listener: Listener, state: Arc<State>) -> Result<()> {
                 let Ok(slot)=slots.clone().try_acquire_owned()else{continue};
                 let state=state.clone();tasks.spawn(async move{let _slot=slot;let _=handle(io,state).await;});
             }
-            _=reap.tick()=>state.stages.reap(&state.app).await,
+            _=reap.tick()=>{
+                state.terminals.reap();
+                state.stages.reap(&state.app).await;
+            },
         }
     }
 }
@@ -515,10 +527,10 @@ impl State {
         };
         match operation {
             "info" => Ok(
-                json!({"name":"RexETerm","role":"rexetermd","version":env!("CARGO_PKG_VERSION"),"ipcVersion":1,"serviceId":self.id}),
+                json!({"name":"RexETerm","role":"rexetermd","version":env!("CARGO_PKG_VERSION"),"buildId":option_env!("REXETERM_BUILD_ID"),"ipcVersion":1,"serviceId":self.id}),
             ),
             "capabilities" => Ok(
-                json!({"nativeIpc":true,"http":false,"exbashIo":["stdio","pty"],"fileProtocol":"re.file.v2","localFiles":"shared-filesystem","maxFileBytes":268435456,"stagingBytes":536870912,"maxRequests":32,"taskHistory":"application-owned","idempotencySeconds":600}),
+                json!({"nativeIpc":true,"http":false,"exbashIo":["stdio","pty"],"ptyPresentation":["text","tui","png","raw"],"fileProtocol":"re.file.v2","localFiles":"shared-filesystem","maxFileBytes":268435456,"stagingBytes":536870912,"maxRequests":32,"taskHistory":"application-owned","idempotencySeconds":600}),
             ),
             "shutdown" => Ok(json!({"stopping":true,"serviceId":self.id})),
             "rpc" => {
@@ -535,16 +547,65 @@ impl State {
                     "executor is required"
                 );
                 let executor = args["executor"].as_str().map(str::to_string);
+                let params = args.get("params").cloned().unwrap_or(json!({}));
+                let directory = args["directory"].as_str();
+                if tool == "exbash" {
+                    let host = field("executor")?;
+                    match params["mode"].as_str() {
+                        Some("run" | "shell") if params["io"] != "stdio" => {
+                            return self
+                                .terminals
+                                .start(app, host, params, directory, &args["terminal"])
+                                .await;
+                        }
+                        Some("attach")
+                            if params["asyncID"]
+                                .as_str()
+                                .is_some_and(|id| !id.starts_with("stdio-")) =>
+                        {
+                            return self
+                                .terminals
+                                .input(app, host, params, directory, &args["terminal"])
+                                .await;
+                        }
+                        _ => {}
+                    }
+                }
+                let _routes = match tool {
+                    "connect_to_executor" => {
+                        let routes = self.routes.lock().await;
+                        if let Some(id) = params["id"].as_str() {
+                            routes.ensure_unmanaged(id)?;
+                        }
+                        Some(routes)
+                    }
+                    "forward" if matches!(params["mode"].as_str(), Some("start" | "stop")) => {
+                        let mut routes = self.routes.lock().await;
+                        if params["mode"] == "stop" {
+                            if let Some(id) = params["forwardID"].as_str() {
+                                if let Some(metadata) = routes.stop_forward(app, id).await? {
+                                    let output = rexeterm_appcore::protocol::tool_output(
+                                        serde_json::to_string_pretty(&metadata)?,
+                                    );
+                                    return Ok(json!({"metadata":metadata,"output":output}));
+                                }
+                            }
+                        }
+                        Some(routes)
+                    }
+                    _ => None,
+                };
                 let value = app
-                    .rpc(
-                        executor.as_deref(),
-                        tool,
-                        args.get("params").cloned().unwrap_or(json!({})),
-                        args["directory"].as_str(),
-                    )
+                    .rpc(executor.as_deref(), tool, params, directory)
                     .await?;
-                self.record_output(executor.as_deref(), &value).await;
-                self.start_pump(executor.as_deref(), &value).await;
+                if tool == "exbash"
+                    && value["metadata"]["asyncID"]
+                        .as_str()
+                        .is_some_and(|id| id.starts_with("stdio-"))
+                {
+                    self.record_output(executor.as_deref(), &value).await;
+                    self.start_pump(executor.as_deref(), &value).await;
+                }
                 Ok(value)
             }
             "hosts.list" => Ok(app.workspace().await?["saved"]["hosts"].clone()),
@@ -571,10 +632,22 @@ impl State {
                 Ok(json!({"ok":true}))
             }
             "hosts.connect" => {
+                let _routes = self.routes.lock().await;
                 Ok(app.connect_host(field("host")?, false).await?["runtime"].clone())
             }
+            "hosts.connect_chain" => {
+                self.routes
+                    .lock()
+                    .await
+                    .connect(app, field("id")?, args["hops"].clone())
+                    .await
+            }
             "hosts.disconnect" => {
-                app.core().disconnect_executor(field("host")?).await?;
+                self.routes
+                    .lock()
+                    .await
+                    .disconnect(app, field("host")?)
+                    .await?;
                 Ok(json!({"ok":true}))
             }
             "hosts.status" => {
@@ -625,6 +698,9 @@ impl State {
             "tasks.read" => {
                 let host = field("host")?;
                 let id = field("id")?;
+                if !id.starts_with("stdio-") {
+                    return self.terminals.read(app, host, id, &args).await;
+                }
                 let wait_ms = args["wait_ms"].as_u64().unwrap_or(1000).min(10_000);
                 let from_start = args["from_start"].as_bool().unwrap_or(false);
                 let since = args["since"].as_u64();
@@ -662,15 +738,16 @@ impl State {
                 let host = field("host")?;
                 let id = field("id")?;
                 self.stop_pump(&(host.to_string(), id.to_string())).await;
-                Ok(app
+                let reply = app
                     .rpc(
                         Some(host),
                         "exbash",
                         json!({"mode":"stop","asyncID":id}),
                         None,
                     )
-                    .await?["metadata"]
-                    .clone())
+                    .await?;
+                self.terminals.note_exit(host, id, &reply["metadata"]);
+                Ok(reply["metadata"].clone())
             }
             "tasks.forget" => {
                 let host = field("host")?;
@@ -679,6 +756,7 @@ impl State {
                 let key = (host.to_string(), id.to_string());
                 self.stop_pump(&key).await;
                 self.outputs.clear(&key).await;
+                self.terminals.clear(host, id);
                 Ok(json!({"ok":true}))
             }
             "resources" => Ok(app
@@ -686,7 +764,7 @@ impl State {
                 .await?["metadata"]
                 .clone()),
             "forwards.list" => {
-                let host = field("host")?;
+                let host = args["host"].as_str();
                 let all = app
                     .rpc(None, "forward", json!({"mode":"list"}), None)
                     .await?;
@@ -694,35 +772,36 @@ impl State {
                     .as_array()
                     .map(|v| v
                         .iter()
-                        .filter(|v| v["executor"] == host)
+                        .filter(|v| host.is_none_or(|host| v["executor"] == host))
                         .cloned()
                         .collect::<Vec<_>>())
                     .unwrap_or_default()))
             }
             "forwards.start" => {
+                let _routes = self.routes.lock().await;
                 let mut body = args["options"].clone();
                 body["mode"] = json!("start");
                 Ok(app.rpc(Some(field("host")?), "forward", body, None).await?["metadata"].clone())
             }
             "forwards.stop" => {
-                let host = field("host")?;
                 let id = field("id")?;
-                let all = app
-                    .rpc(None, "forward", json!({"mode":"list"}), None)
-                    .await?;
-                ensure!(
-                    all["metadata"]["forwards"].as_array().is_some_and(|v| v
-                        .iter()
-                        .any(|v| v["executor"] == host && v["forwardID"] == id)),
-                    "forward not found for host"
-                );
+                let mut routes = self.routes.lock().await;
+                if let Some(host) = args["host"].as_str() {
+                    let all = app
+                        .rpc(None, "forward", json!({"mode":"list"}), None)
+                        .await?;
+                    ensure!(
+                        all["metadata"]["forwards"].as_array().is_some_and(|v| v
+                            .iter()
+                            .any(|v| v["executor"] == host && v["forwardID"] == id)),
+                        "forward not found for host"
+                    );
+                }
+                if let Some(stopped) = routes.stop_forward(app, id).await? {
+                    return Ok(stopped);
+                }
                 Ok(app
-                    .rpc(
-                        Some(host),
-                        "forward",
-                        json!({"mode":"stop","forwardID":id}),
-                        None,
-                    )
+                    .rpc(None, "forward", json!({"mode":"stop","forwardID":id}), None)
                     .await?["metadata"]
                     .clone())
             }

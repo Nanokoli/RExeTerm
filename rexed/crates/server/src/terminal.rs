@@ -1,9 +1,10 @@
 //! Terminal data messages and PTY adaptation, independent of physical links.
 use crate::protocol::terminal::{AdminText, ClientText, ServerText};
-use crate::shell_manager::{ShellManager, TerminalEvent};
+use crate::shell_manager::{PendingOutput, ShellManager, TerminalEvent};
 use crate::transport::{Frame, Receiver, Sender};
 use anyhow::{anyhow, Result};
 use tokio::sync::mpsc;
+use tokio::time::{timeout, Duration};
 
 struct TerminalClient {
     manager: ShellManager,
@@ -33,12 +34,19 @@ pub(crate) async fn handle_first_text_with_policy(
         return Ok(());
     }
 
+    let request = serde_json::from_str::<ClientText>(&first_text);
+    if let Ok(ClientText::Observe { pty }) = &request {
+        return match manager.take_reserved_output(pty, owner.as_ref()) {
+            Ok(pending) => serve_reserved_output(pty, pending, sender, receiver).await,
+            Err(error) => send_response(&mut sender, Err(error)).await,
+        };
+    }
     let Ok(ClientText::Hello {
         id,
         pty,
         cols,
         rows,
-    }) = serde_json::from_str::<ClientText>(&first_text)
+    }) = request
     else {
         send_response(
             &mut sender,
@@ -67,6 +75,75 @@ pub(crate) async fn handle_first_text_with_policy(
         force_read_only,
     })
     .await
+}
+
+async fn serve_reserved_output(
+    pty: &str,
+    pending: PendingOutput,
+    mut sender: Sender,
+    mut receiver: Receiver,
+) -> Result<()> {
+    let PendingOutput {
+        session,
+        mut output,
+        mut size,
+    } = pending;
+    let meta = |size: remote_executor_terminal::TermSize, exit_code| {
+        Ok(ServerText::Meta {
+            id: String::new(),
+            pty: pty.into(),
+            role: "Viewer".into(),
+            read_only: true,
+            cols: size.cols,
+            rows: size.rows,
+            exit_code,
+        })
+    };
+    let send = async {
+        timeout(
+            Duration::from_secs(5),
+            send_response(&mut sender, meta(size, None)),
+        )
+        .await??;
+        loop {
+            match output.recv().await {
+                Ok(data) => {
+                    let current = session.terminal_size();
+                    if current.cols != size.cols || current.rows != size.rows {
+                        size = current;
+                        timeout(
+                            Duration::from_secs(5),
+                            send_response(&mut sender, meta(size, None)),
+                        )
+                        .await??;
+                    }
+                    timeout(Duration::from_secs(5), sender.send(Frame::Binary(data))).await??;
+                }
+                Err(_) if output.is_closed() => {
+                    let result = session.try_exit_code().and_then(|code| meta(size, code));
+                    timeout(Duration::from_secs(5), send_response(&mut sender, result)).await??;
+                    break;
+                }
+                Err(error) => {
+                    timeout(
+                        Duration::from_secs(1),
+                        send_response(&mut sender, Err(error)),
+                    )
+                    .await??;
+                    break;
+                }
+            }
+        }
+        timeout(Duration::from_secs(1), sender.send(Frame::Close)).await??;
+        Ok(())
+    };
+    tokio::select! {
+        result = send => result,
+        frame = receiver.recv() => match frame? {
+            None | Some(Frame::Close) => Ok(()),
+            _ => Err(anyhow!("PTY output observation is read-only")),
+        },
+    }
 }
 
 async fn handle_terminal_client(client: TerminalClient) -> Result<()> {
@@ -245,7 +322,7 @@ async fn handle_client_message(
                     }
                 }
             }
-            Ok(ClientText::Hello { .. }) => Ok(()),
+            Ok(ClientText::Hello { .. } | ClientText::Observe { .. }) => Ok(()),
             Err(err) => {
                 send_error_tx(tx, &format!("bad client message: {err}"));
                 Ok(())

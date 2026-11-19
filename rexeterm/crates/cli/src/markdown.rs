@@ -1,5 +1,7 @@
 //! One bounded card per invocation; payload text lives in ___ blocks, never in fences.
 pub use crate::commands::Sink;
+use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde_json::Value;
 use std::{
     fmt::Write,
@@ -12,7 +14,7 @@ use std::{
 pub struct Options {
     pub sinks: Vec<Sink>,
     pub out_dir: Option<PathBuf>,
-    /// Inline bodies longer than this are cut; the file keeps everything.
+    /// Inline bodies longer than this are cut; selected file sinks keep the payload.
     pub text_limit: usize,
     /// Exact destination for `-raw`; overrides the generated name.
     pub raw_path: Option<PathBuf>,
@@ -36,15 +38,7 @@ impl Options {
     fn inline(&self) -> bool {
         self.sinks.iter().any(|sink| matches!(sink, Sink::Text))
     }
-    fn to_file(&self) -> bool {
-        self.sinks
-            .iter()
-            .any(|sink| matches!(sink, Sink::File | Sink::Raw | Sink::Png))
-    }
 }
-
-/// Field lists at least this long are folded into a <details> element.
-const DETAILS_FIELDS: usize = 3;
 
 fn safe(text: &str) -> String {
     text.chars()
@@ -113,22 +107,9 @@ fn truncate(body: &str, limit: usize) -> &str {
 }
 
 fn terminal_size(meta: &Value) -> (u64, u64) {
-    let cols = meta["terminalOutput"]["cols"].as_u64().unwrap_or(0);
-    let rows = meta["terminalOutput"]["rows"].as_u64().unwrap_or(0);
-    match (cols, rows) {
-        (0, 0) => (80, 24),
-        size => size,
-    }
-}
-
-fn extension(io: &str, body: &str) -> &'static str {
-    if body.starts_with('\u{89}') {
-        return "png";
-    }
-    match io {
-        "pty" => "bin",
-        _ => "txt",
-    }
+    let cols = meta["terminalOutput"]["cols"].as_u64().unwrap_or(80);
+    let rows = meta["terminalOutput"]["rows"].as_u64().unwrap_or(24);
+    (cols, rows)
 }
 
 fn write_sink(
@@ -137,38 +118,55 @@ fn write_sink(
     ext: &str,
     meta: &Value,
     options: &Options,
-) -> Option<PathBuf> {
-    // `-raw FILE` / `-png FILE` name the exact destination.
+) -> Result<PathBuf> {
     let explicit = match ext {
-        "bin" => options.raw_path.clone(),
-        "png" => options.png_path.clone(),
+        "bin" => options.raw_path.as_ref(),
+        "png" => options.png_path.as_ref(),
         _ => None,
     };
     if let Some(path) = explicit {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).ok()?;
+        if let Some(parent) = path.parent().filter(|path| !path.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("cannot create output directory {}", parent.display()))?;
         }
-        std::fs::write(&path, body).ok()?;
-        return Some(path);
+        std::fs::write(path, body)
+            .with_context(|| format!("cannot write output sink {}", path.display()))?;
+        return Ok(path.clone());
     }
     let dir = options
         .out_dir
         .clone()
         .unwrap_or_else(|| PathBuf::from(".rexeterm-out"));
-    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("cannot create output directory {}", dir.display()))?;
     let (cols, rows) = terminal_size(meta);
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()?
-        .as_millis();
-    let mut path = dir.join(format!("{stamp}-{cols}x{rows}-{field}.{ext}"));
-    let mut attempt = 2;
-    while path.exists() {
-        path = dir.join(format!("{stamp}-{cols}x{rows}-{field}-{attempt}.{ext}"));
-        attempt += 1;
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+    for attempt in 0.. {
+        let suffix = if attempt == 0 {
+            String::new()
+        } else {
+            format!("-{attempt}")
+        };
+        let path = dir.join(format!("{stamp}-{cols}x{rows}-{field}{suffix}.{ext}"));
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path);
+        match file {
+            Ok(mut file) => {
+                use std::io::Write as _;
+                file.write_all(body)
+                    .with_context(|| format!("cannot write output sink {}", path.display()))?;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("cannot open output sink {}", path.display()))
+            }
+        }
     }
-    std::fs::write(&path, body).ok()?;
-    Some(path)
+    unreachable!("unbounded suffix generator")
 }
 
 fn emit_payload(
@@ -178,7 +176,7 @@ fn emit_payload(
     meta: &Value,
     options: &Options,
     out: &mut String,
-) {
+) -> Result<()> {
     if options.inline() {
         let shown = truncate(body, options.text_limit);
         let _ = writeln!(out, ">mode: {}", mode(io, false, meta, body));
@@ -193,39 +191,16 @@ fn emit_payload(
             );
         }
     }
-    if options.to_file() {
-        let mut sinks: Vec<(&str, Vec<u8>, String)> = Vec::new();
-        // Only the terminal screen becomes an image; command/message payloads
-        // would otherwise overwrite the same file.
-        if options.sinks.contains(&Sink::Png) && io == "pty" && field == "text" {
-            // rexeterm holds the screen, so it turns it into the image itself.
-            let (cols, rows) = terminal_size(meta);
-            match crate::screenshot::screen_png(body, cols as u16, rows as u16) {
-                Ok(png) => sinks.push(("png", png, format!("{io}-png-file"))),
-                Err(error) => {
-                    let _ = writeln!(out, ">**screenshot failed**: {error:#}");
-                }
-            }
+    if options.sinks.contains(&Sink::File) {
+        let path = write_sink(body.as_bytes(), field, "txt", meta, options)?;
+        let _ = writeln!(out, ">mode: {io}-text-file");
+        if !options.inline() {
+            let _ = writeln!(out, "# {io}-{field}\n");
         }
-        if options
-            .sinks
-            .iter()
-            .any(|sink| matches!(sink, Sink::File | Sink::Raw))
-        {
-            let ext = extension(io, body);
-            sinks.push((ext, body.as_bytes().to_vec(), mode(io, true, meta, body)));
-        }
-        for (ext, bytes, mode_name) in sinks {
-            if let Some(path) = write_sink(&bytes, field, ext, meta, options) {
-                let _ = writeln!(out, ">mode: {mode_name}");
-                if !options.inline() {
-                    let _ = writeln!(out, "# {io}-{field}\n");
-                }
-                let _ = writeln!(out, ">**file**: {}", code(&path.display().to_string()));
-                out.push('\n');
-            }
-        }
+        let _ = writeln!(out, ">**file**: {}", code(&path.display().to_string()));
+        out.push('\n');
     }
+    Ok(())
 }
 
 /// Container headings always start a new block, so lists above them stay intact.
@@ -235,9 +210,9 @@ fn heading(out: &mut String, depth: usize, name: &str) {
     }
     let _ = writeln!(out, "{} {}\n", "#".repeat((depth + 2).min(6)), name);
 }
-/// Task card: `>` title, `>>` description, `>>>` command and path, then identity
-/// and the exit state. Everything else is folded, payload blocks stay visible.
-fn task_card(meta: &Value, output: &Value, options: &Options, out: &mut String) {
+/// Task card: `>` title, `>>` description, `>>>` command and path,
+/// followed by identity, exit state and payload blocks.
+fn task_card(meta: &Value, output: &Value, options: &Options, out: &mut String) -> Result<()> {
     let text = |key: &str| meta[key].as_str().unwrap_or_default().to_string();
     let title = match text("title") {
         title if title.is_empty() => "未命名".to_string(),
@@ -284,7 +259,11 @@ fn task_card(meta: &Value, output: &Value, options: &Options, out: &mut String) 
     }
     match meta.get("exitCode") {
         None | Some(Value::Null) => {
-            let _ = writeln!(out, ">running");
+            let state = meta["state"]
+                .as_str()
+                .filter(|state| !state.is_empty())
+                .unwrap_or("running");
+            let _ = writeln!(out, ">{}", label(state));
         }
         Some(exit) => {
             let _ = writeln!(out, ">exitCode: {exit}");
@@ -308,18 +287,57 @@ fn task_card(meta: &Value, output: &Value, options: &Options, out: &mut String) 
             .map(str::to_string)
     };
     let emit = |field: &str, body: &str, out: &mut String| {
-        emit_payload(field, body, &io, meta, options, out);
+        emit_payload(field, body, &io, meta, options, out).with_context(|| {
+            format!(
+                "cannot save output for asyncID {}",
+                meta["asyncID"].as_str().unwrap_or_default()
+            )
+        })
     };
     if !text("command").is_empty() {
-        emit("command", &text("command"), out);
+        emit("command", &text("command"), out)?;
     }
     for key in ["stdout", "stderr", "text", "message", "info", "file"] {
         if let Some(body) = body(key) {
-            emit(key, &body, out);
+            emit(key, &body, out)?;
+        }
+    }
+    if io == "pty" {
+        for (sink, key, ext, mode) in [
+            (Sink::Raw, "rawBase64", "bin", "pty-raw-file"),
+            (Sink::Png, "pngBase64", "png", "pty-png-file"),
+        ] {
+            if options.sinks.contains(&sink) {
+                let data = output[key].as_str()
+                    .with_context(|| format!("rexetermd did not return {mode} for asyncID {}; verify the bound daemon is up to date", text("asyncID")))?;
+                let path = write_sink(&BASE64.decode(data)?, "text", ext, meta, options)?;
+                let _ = writeln!(
+                    out,
+                    ">mode: {mode}\n\n>**file**: {}\n",
+                    code(&path.display().to_string())
+                );
+            }
+        }
+        let terminal = &meta["terminalOutput"];
+        if let Some(error) = terminal["error"].as_str() {
+            let _ = writeln!(out, ">**PTY stream**: {}\n", label(error));
+        } else if terminal["capture"] == "legacy-initial-plus-live" {
+            out.push_str(
+                ">**PTY capture**: This executor can miss output between start and attach.\n\n",
+            );
+        } else if terminal["capture"] == "live-only" {
+            out.push_str(">**PTY capture**: Output starts at attach; earlier screen contents are unavailable.\n\n");
         }
     }
     let mut footer: Vec<(&str, String)> = Vec::new();
-    for key in ["startedAt", "endedAt", "outputLimitBytes"] {
+    for key in [
+        "startedAt",
+        "endedAt",
+        "outputLimitBytes",
+        "from",
+        "next_offset",
+        "dropped_bytes",
+    ] {
         if let Some(value) = meta.get(key).filter(|value| !value.is_null()) {
             footer.push((
                 key,
@@ -336,6 +354,7 @@ fn task_card(meta: &Value, output: &Value, options: &Options, out: &mut String) 
         }
         out.push('\n');
     }
+    Ok(())
 }
 
 fn mode(io: &str, file: bool, meta: &Value, body: &str) -> String {
@@ -362,7 +381,7 @@ fn mode(io: &str, file: bool, meta: &Value, body: &str) -> String {
     }
 }
 
-fn fields(value: &Value, depth: usize, options: &Options, out: &mut String) {
+fn fields(value: &Value, depth: usize, options: &Options, out: &mut String) -> Result<()> {
     // Tool payloads have their own text representation; do not print duplicate JSON text.
     if let Some(obj) = value.as_object() {
         if obj.contains_key("metadata") && obj.contains_key("output") {
@@ -371,10 +390,9 @@ fn fields(value: &Value, depth: usize, options: &Options, out: &mut String) {
                 .and_then(Value::as_str)
                 .is_some()
             {
-                task_card(&obj["metadata"], &obj["output"], options, out);
-                return;
+                return task_card(&obj["metadata"], &obj["output"], options, out);
             }
-            fields(&obj["metadata"], depth, options, out);
+            fields(&obj["metadata"], depth, options, out)?;
             let output = &obj["output"];
             for key in ["message", "text", "info"] {
                 if let Some(text) = output[key].as_str().filter(|s| !s.is_empty()) {
@@ -387,7 +405,7 @@ fn fields(value: &Value, depth: usize, options: &Options, out: &mut String) {
                     block(text, out);
                 }
             }
-            return;
+            return Ok(());
         }
         if obj.is_empty() {
             out.push_str("(empty)\n\n");
@@ -395,10 +413,9 @@ fn fields(value: &Value, depth: usize, options: &Options, out: &mut String) {
         // Order: the executed argv first, then plain keys, then nested blocks and
         // multi-line payloads, so a card reads top-down instead of alphabetically.
         let mut blocks: Vec<(&String, &Value)> = Vec::new();
-        let mut scalars = String::new();
         if let Some(argv) = obj.get("argv") {
             heading(out, depth, "argv");
-            fields(argv, depth + 1, options, out);
+            fields(argv, depth + 1, options, out)?;
         }
         for (key, value) in obj {
             if key == "argv" {
@@ -413,17 +430,9 @@ fn fields(value: &Value, depth: usize, options: &Options, out: &mut String) {
                         Value::String(s) => label(s),
                         other => other.to_string(),
                     };
-                    let _ = writeln!(scalars, "- **{}**: {}", key_label(key), shown);
+                    let _ = writeln!(out, "- **{}**: {}", key_label(key), shown);
                 }
             }
-        }
-        // A long key list is reference material, not the answer: fold it.
-        if scalars.lines().count() >= DETAILS_FIELDS {
-            out.push_str("<details>\n<summary>点击展开查看更多内容</summary>\n\n");
-            out.push_str(&scalars);
-            out.push_str("\n</details>\n\n");
-        } else {
-            out.push_str(&scalars);
         }
         for (key, value) in blocks {
             let name = key_label(key);
@@ -434,7 +443,7 @@ fn fields(value: &Value, depth: usize, options: &Options, out: &mut String) {
                 }
                 _ => {
                     heading(out, depth, &name);
-                    fields(value, depth + 1, options, out);
+                    fields(value, depth + 1, options, out)?;
                 }
             }
         }
@@ -466,7 +475,7 @@ fn fields(value: &Value, depth: usize, options: &Options, out: &mut String) {
                     format!(" — {}", label(name))
                 };
                 heading(out, depth, &format!("Item {}{}", index + 1, suffix));
-                fields(row, depth + 1, options, out);
+                fields(row, depth + 1, options, out)?;
             }
         }
     } else if let Some(text) = value.as_str() {
@@ -474,15 +483,16 @@ fn fields(value: &Value, depth: usize, options: &Options, out: &mut String) {
     } else {
         let _ = writeln!(out, "{value}\n");
     }
+    Ok(())
 }
 pub fn render(value: &Value) -> String {
-    render_with(value, &Options::default())
+    render_with(value, &Options::default()).expect("inline rendering does not write files")
 }
 
-pub fn render_with(value: &Value, options: &Options) -> String {
+pub fn render_with(value: &Value, options: &Options) -> Result<String> {
     let mut out = String::from("# Result\n\n");
-    fields(value, 0, options, &mut out);
-    out
+    fields(value, 0, options, &mut out)?;
+    Ok(out)
 }
 pub fn error(message: &str) -> String {
     let mut out = String::from("# Error\n\n");
@@ -499,6 +509,7 @@ mod tests {
         assert!(out.contains("- **buffered_bytes**: 6"), "{out}");
         assert!(out.contains("- **next_offset**: 6"), "{out}");
         assert!(out.contains("- **description**: —"), "{out}");
+        assert!(!out.contains("<details>"), "{out}");
         assert!(!out.contains('\\'), "{out}");
     }
 
@@ -519,7 +530,6 @@ mod tests {
         assert!(out.contains(">pid: 7"), "{out}");
         assert!(out.contains(">exitCode: 3"), "{out}");
         assert!(!out.contains("running"), "{out}");
-        assert!(!out.contains("<details>"), "{out}");
     }
 
     #[test]

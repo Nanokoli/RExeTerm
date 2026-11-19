@@ -10,6 +10,7 @@ use std::{
 #[derive(Clone)]
 pub struct ClientSettingsStore {
     path: Option<PathBuf>,
+    named_executors: bool,
     state: Arc<Mutex<State>>,
 }
 struct State {
@@ -26,6 +27,7 @@ impl ClientSettingsStore {
         settings.validate()?;
         Ok(Self {
             path: None,
+            named_executors: false,
             state: Arc::new(Mutex::new(State {
                 settings,
                 reload_error: None,
@@ -33,17 +35,24 @@ impl ClientSettingsStore {
         })
     }
     pub fn load(path: PathBuf) -> Result<Self> {
+        Self::load_layout(path, false)
+    }
+    pub fn load_cli(path: PathBuf) -> Result<Self> {
+        Self::load_layout(path, true)
+    }
+    fn load_layout(path: PathBuf, named_executors: bool) -> Result<Self> {
         let path = if path.is_absolute() {
             path
         } else {
             std::env::current_dir()?.join(path)
         };
-        let settings = read(&path)?;
-        if path.is_file() && !settings.executors.is_empty() {
-            write(&path, &settings)?;
+        let settings = read(&path, named_executors)?;
+        if !named_executors && path.is_file() && !settings.executors.is_empty() {
+            write(&path, &settings, named_executors)?;
         }
         Ok(Self {
             path: Some(path),
+            named_executors,
             state: Arc::new(Mutex::new(State {
                 settings,
                 reload_error: None,
@@ -76,7 +85,7 @@ impl ClientSettingsStore {
             state.reload_error = None;
             return Ok(());
         };
-        match read(path) {
+        match read(path, self.named_executors) {
             Ok(settings) => {
                 state.settings = settings;
                 state.reload_error = None;
@@ -118,7 +127,7 @@ impl ClientSettingsStore {
         }
         next.validate()?;
         if let Some(path) = &self.path {
-            write(path, &next)?;
+            write(path, &next, self.named_executors)?;
         }
         state.settings = next;
         state.reload_error = None;
@@ -167,7 +176,7 @@ impl ClientSettingsStore {
         }
         next.validate()?;
         if let Some(path) = &self.path {
-            write(path, &next)?;
+            write(path, &next, self.named_executors)?;
         }
         state.settings = next;
         state.reload_error = None;
@@ -222,7 +231,7 @@ impl ClientSettingsStore {
         })
     }
 }
-fn read(path: &Path) -> Result<ClientSettings> {
+fn read(path: &Path, named_executors: bool) -> Result<ClientSettings> {
     let mut settings: ClientSettings = match fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes)
             .with_context(|| format!("failed to parse client settings {}", path.display()))?,
@@ -235,6 +244,7 @@ fn read(path: &Path) -> Result<ClientSettings> {
     let root = path.parent().unwrap_or_else(|| Path::new("."));
     let directories = root.join("executors");
     if directories.is_dir() {
+        let mut preferred = Vec::new();
         for directory in fs::read_dir(directories)? {
             let file = directory?.path().join("preferences.json");
             if !file.is_file() {
@@ -244,24 +254,34 @@ fn read(path: &Path) -> Result<ClientSettings> {
             let id = document["executorId"]
                 .as_str()
                 .ok_or_else(|| anyhow!("executor preferences missing executorId"))?;
-            anyhow::ensure!(
-                file == crate::config::executor_directory(root, id).join("preferences.json"),
-                "executor preferences path mismatch"
-            );
-            settings.executors.insert(
-                id.into(),
-                serde_json::from_value(document["settings"].clone())?,
-            );
+            let overlay = serde_json::from_value(document["settings"].clone())?;
+            if named_executors
+                && file
+                    == crate::config::named_executor_directory(root, id).join("preferences.json")
+            {
+                preferred.push((id.to_owned(), overlay));
+            } else {
+                anyhow::ensure!(
+                    file == crate::config::executor_directory(root, id).join("preferences.json"),
+                    "executor preferences path mismatch"
+                );
+                settings.executors.insert(id.to_owned(), overlay);
+            }
         }
+        settings.executors.extend(preferred);
     }
     settings.validate()?;
     Ok(settings)
 }
-fn write(path: &Path, settings: &ClientSettings) -> Result<()> {
+fn write(path: &Path, settings: &ClientSettings, named_executors: bool) -> Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     anyhow::ensure!(!path.is_dir(), "client settings path is a directory");
     for (id, target) in &settings.executors {
-        let directory = crate::config::executor_directory(parent, id);
+        let directory = if named_executors {
+            crate::config::named_executor_directory(parent, id)
+        } else {
+            crate::config::executor_directory(parent, id)
+        };
         crate::config::write_json(
             &directory.join("preferences.json"),
             &serde_json::json!({"executorId":id,"settings":target}),

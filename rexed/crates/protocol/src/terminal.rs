@@ -11,6 +11,10 @@ pub enum ClientText {
         cols: u16,
         rows: u16,
     },
+    /// Claim the one live output subscription reserved by an exbash start.
+    Observe {
+        pty: String,
+    },
     Resize {
         cols: u16,
         rows: u16,

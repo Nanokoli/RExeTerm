@@ -22,9 +22,11 @@ SDK 不加载客户端偏好，不处理 list_shells / set_default_shell / reque
 ## 接口与生命周期
 
 Client::new 创建空路由，不启动 shell、PTY 或监听。connect_to_executor 注册远端，首个成功节点成为默认，
-随后可以 set_default_executor 或逐请求指定目标。selected_executor 返回身份与 shellCommand 能力快照，供应用层准备请求。
+随后可以 set_default_executor 或逐请求指定目标。selected_executor 返回身份及 `shellCommand`、`ptyOutputStream` 能力快照，供应用层准备请求。
 Client::handle 传递 RE 工具；应用层预先生成 shellCommand 时原样发送，不在 SDK 内解析 shell profile。
-open_terminal 和 transfer_file 分别提供原始 PTY 与文件 API，ManagementClient 与业务连接独立。
+`open_terminal` 和 `transfer_file` 分别提供原始 PTY 与文件 API，ManagementClient 与业务连接独立。
+`observe_terminal` 交接启动时保留的只读订阅。实时终端连接的通道限额与短 PTY RPC 分开，
+二者使用相同的 `channels.pty` 配置值，并共用底层物理链路容量。
 
 克隆 Client 共享节点、写锁、通道和转发。宿主先停止新工作并等待/取消在途任务，再释放终端并等待 shutdown。
 shutdown 清空共享节点、停止转发、尽力关闭 RE 会话，保留远端程序；当前不是永久关闭屏障。
@@ -38,7 +40,7 @@ SDK 依赖 protocol、transport 与 data，不依赖服务端、PTY 创建、Rex
 
 ## 客户端身份与资源归属
 
-`ClientCredentialStore` 由应用提供持久恢复凭据，SDK 默认仅内存保存。资源归属、宽限期回收和
+`ClientCredentialStore` 由应用提供持久恢复凭据；SDK 默认按在线执行器 ID 和远端身份在内存中保存恢复凭据。同一地址的不同在线 ID 可分别断开。资源归属、宽限期回收和
 `client_resources` 由服务端负责；详见[会话与运维](management.md)。
 任务 `exbash` 与转发工具的顶层 `title`、`description`，以及文件请求
 `FileTransferOptions.metadata`，共用 40 / 200 个 Unicode 字符限制。

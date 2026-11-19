@@ -69,8 +69,11 @@ client.shutdown().await;
 exbash 返回 `metadata.terminalOutput`，`format: raw-pty-v1` 表示本次等待窗口原始输出的 UTF-8 投影，
 并携带 `cols` / `rows`。单次命令回答收集上限为 1 MiB，超出标记 `outputTruncated`，实时 PTY 流不受此回答上限影响。
 后续 attach 不回放旧数据，停止或已退出任务返回状态和空输出。
-RexETerm AppCore 按本次片段解析为 MCP/CLI 文字，标记 `client-screen-v1`；
-GUI 的二进制输出只交给 xterm。RE SDK 本身继续提供原始能力，不保证新 viewer 恢复旧屏幕。
+能力 `ptyOutputStream` 的执行器支持在 PTY 启动时传 `streamOutput: true`。命令立即返回任务 ID；
+`Client::observe_terminal` 可由归属客户端在 30 秒内一次性交接已建立的实时订阅。
+订阅从进程启动前开始，使用原始二进制帧，任务结束后先发送剩余输出，再发送退出状态。
+RE 保留有界的未读在途数据，屏幕恢复与回放由客户端维护。
+RexETerm 的 `rexetermd` 持续解析 CLI 的屏幕；MCP 的单次文字预览和 GUI 的 xterm 不依赖此屏幕。
 
 默认列表仅属当前客户端。已知 PTY ID 允许同 RE 用户的其他客户端只读附着，
 `meta.read_only: true` 表达不可升级的权限；输入、resize 和 request_control 都在服务端拒绝，

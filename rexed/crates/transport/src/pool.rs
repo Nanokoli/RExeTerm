@@ -60,6 +60,7 @@ struct State {
     connector: Arc<dyn Connector>,
     routes: Vec<Route>,
     lanes: [Arc<Semaphore>; 5],
+    terminal_streams: Arc<Semaphore>,
     next: AtomicUsize,
     available: Arc<Notify>,
     limits: ChannelLimits,
@@ -109,6 +110,7 @@ impl ChannelPool {
             connector,
             routes,
             lanes: limits.values().map(|n| Arc::new(Semaphore::new(n))),
+            terminal_streams: Arc::new(Semaphore::new(limits.pty)),
             next: AtomicUsize::new(0),
             available: Arc::new(Notify::new()),
             limits,
@@ -121,12 +123,30 @@ impl ChannelPool {
         self.0.routes.iter().map(|r| r.target.as_str()).collect()
     }
     pub async fn connect(&self, purpose: Purpose) -> Result<(Link, ChannelLease)> {
-        let mut lane = Some(
-            self.0.lanes[purpose.index()]
-                .clone()
-                .acquire_owned()
-                .await?,
-        );
+        let lane = self.0.lanes[purpose.index()]
+            .clone()
+            .acquire_owned()
+            .await?;
+        self.connect_with_lease(purpose, lane).await
+    }
+
+    /// A persistent viewer cannot use up the slots for PTY create/input/status RPCs.
+    pub async fn connect_terminal(&self) -> Result<(Link, ChannelLease)> {
+        let lane = self
+            .0
+            .terminal_streams
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| anyhow!("terminal stream channel capacity reached"))?;
+        self.connect_with_lease(Purpose::Pty, lane).await
+    }
+
+    async fn connect_with_lease(
+        &self,
+        purpose: Purpose,
+        lane: OwnedSemaphorePermit,
+    ) -> Result<(Link, ChannelLease)> {
+        let mut lane = Some(lane);
         loop {
             let notified = self.0.available.notified();
             tokio::pin!(notified);

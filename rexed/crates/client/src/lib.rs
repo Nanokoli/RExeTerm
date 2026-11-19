@@ -187,6 +187,7 @@ impl Client {
         Ok(ExecutorSelection {
             info: endpoint.info().clone(),
             client_shell_command: endpoint.supports_client_shell_command(),
+            pty_output_stream: endpoint.supports_pty_output_stream(),
         })
     }
 
