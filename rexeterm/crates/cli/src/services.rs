@@ -77,6 +77,7 @@ async fn start(registry: &Registry, record: ServiceRecord) -> Result<ServiceReco
     if running(&record).await {
         return Ok(record);
     }
+    crate::directory::check_state(&record.config_dir)?;
     // The child inherits the actual cwd and receives the ID, so concurrent starts
     // never hand off identity through a shared file.
     let binary = std::env::current_exe()?;

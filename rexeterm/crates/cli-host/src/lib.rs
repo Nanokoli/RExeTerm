@@ -13,6 +13,7 @@ use std::{
 
 /// Project directory for CLI preferences and saved entries.
 pub const PROJECT_DIR: &str = ".rexeterm";
+const REGISTRY_DIR: &str = ".rexeterm-socket";
 pub const BINDING_FILE: &str = "RexETermHostUUID.txt";
 pub const ID_HEADER: &str = "x-rexeterm-service-id";
 pub fn validate_id(id: &str) -> Result<()> {
@@ -53,10 +54,12 @@ impl Registry {
         Self::for_boot(Self::base(base)?, boot_id()?, false)
     }
     fn base(base: Option<PathBuf>) -> Result<PathBuf> {
-        match base {
-            Some(base) => Ok(base),
-            None => default_directory(),
-        }
+        let base = match base {
+            Some(base) => base,
+            None => default_directory()?,
+        };
+        directory::check_registry(&base)?;
+        Ok(base)
     }
     fn for_boot(base: PathBuf, boot_id: String, create: bool) -> Result<Self> {
         ensure!(
@@ -137,6 +140,7 @@ impl Registry {
         Ok(record)
     }
     pub fn reserve(&self, config_dir: &Path, local: bool) -> Result<ServiceRecord> {
+        directory::check_state(config_dir)?;
         private_directory(config_dir)?;
         let config_dir = std::fs::canonicalize(config_dir)?;
         let _lock = self.lock()?;
@@ -174,6 +178,7 @@ impl Registry {
     }
     pub fn start(&self, id: &str) -> Result<Registration> {
         let record = self.resolve(id)?;
+        directory::check_state(&record.config_dir)?;
         let lock = private_open(&record.config_dir.join("cli-host.lock"))?;
         lock.try_lock()
             .context("this host config directory is already running")?;
@@ -296,7 +301,7 @@ pub fn default_directory() -> Result<PathBuf> {
     Ok(std::env::current_exe()?
         .parent()
         .context("CLI executable has no parent")?
-        .join(".rexeterm-socket"))
+        .join(REGISTRY_DIR))
 }
 /// The OS account is unchanged; this is only the Linux process display name.
 pub fn set_daemon_name() -> Result<()> {

@@ -134,7 +134,7 @@ where
     name = "rexeterm",
     version,
     about = "Agent CLI for local and remote executors; results are Markdown by default",
-    after_help = "Start with `info` or `service list`. For a new project, use `service create` (add --local for the built-in executor).\nList saved executors with `-e -list_local`, connections with `-e -list_online`, and credential links with `-cr -list_local`.\nConnect with `-ec CREDENTIAL@HOSTNAME [as LIVE_ID]` (short for `executor connect`). Separate hops with `:`; the last hostname is the default live ID.\nForward with `-f PORT:TARGET_HOST@ONLINE_EXECUTOR:TARGET_PORT`; `-f` lists all forwards, `-f ID --stop` stops one. No -e needed.\nRun with `-e ID --cmd COMMAND --rcwd DIR -t 1000`. If still running, use `-e ID -A ASYNCID -t 1000`; check exitCode.\nFor a PTY, start with `--pty 80x24`. Use `-A ASYNCID --tui` or `--png FILE` for the current screen, `--text TEXT` to send keys, or `--read --raw FILE` to save retained bytes.\nSelect the local directory with cd or REXETERM_CWD; --rcwd is remote. .rexeterm.disable blocks calls in the local directory.",
+    after_help = "Start with `info` or `service list`. For a new project, use `service create` (add --local for the built-in executor).\nList saved executors with `-e -list_local`, connections with `-e -list_online`, and credential links with `-cr -list_local`.\nConnect with `-ec CREDENTIAL@HOSTNAME [as LIVE_ID]` (short for `executor connect`). Separate hops with `:`; the last hostname is the default live ID.\nForward with `-f PORT:TARGET_HOST@ONLINE_EXECUTOR:TARGET_PORT`; `-f` lists all forwards, `-f ID --stop` stops one. No -e needed.\nRun with `-e ID --cmd COMMAND --rcwd DIR -t 1000`. If still running, use `-e ID -A ASYNCID -t 1000`; check exitCode.\nFor a PTY, start with `--pty 80x24`. Use `-A ASYNCID --tui` or `--png FILE` for the current screen, `--text TEXT` to send keys, or `--read --raw FILE` to save retained bytes.\nSelect the local directory with cd or REXETERM_CWD; --rcwd is remote.\n.rexeterm.disable blocks calls in its directory, and blocks using its registry or starting a daemon with its state directory even from another cwd.",
     disable_help_subcommand = true
 )]
 pub struct Args {
@@ -351,7 +351,7 @@ enum Command {
     /// Run this binary as the persistent rexetermd host (native local IPC).
     #[command(long_flag = "daemon", visible_alias = "deamon")]
     Daemon(DaemonArgs),
-    /// Add .rexeterm.disable in the current directory; no host is needed.
+    /// Disable calls here and use of this directory's daemon storage; no host is needed.
     Disable,
     /// Remove .rexeterm.disable from the current directory; no host is needed.
     Enable,

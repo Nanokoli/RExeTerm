@@ -40,6 +40,10 @@ Unix 私有目录 0700、记录/token/socket 0600；Windows 使用当前用户�
 
 `info`、`service info/list`、`executor list/status`、本地执行器与凭证列表不启动宿主。业务调用可以重启已经绑定的服务；未绑定时显式创建或选择。重启后需重新连接远端执行器。
 
+共享目录有 `.rexeterm.disable` 时，从子项目传入指向共享目录的 `--registry-dir` 也会被拒绝。
+请使用项目自己的 registry（例如 `.rexeterm/runtime`），并将宿主状态留在项目目录中。
+标记的具体作用范围见[目录禁用标记](modules/cli.md#目录禁用标记)。
+
 ## 协议
 
 Linux 使用 Unix socket，Windows 使用 `\\.\pipe\rexeterm-<UUID64>` 命名管道。

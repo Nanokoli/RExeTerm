@@ -19,6 +19,8 @@ rx info
 
 本机 cwd（`cd` 或 `REXETERM_CWD`）决定客户端配置、宿主绑定和本地相对文件路径。`--rcwd DIR` 指远端工作目录。省略 `--rcwd` 时使用执行器的默认目录；`executor host add --root` 只记录该执行器的文件浏览起点。布局和迁移见 [CLI IPC](cli-ipc.md) 与 [客户端配置](client-config.md)。
 
+如果报错指向共享根目录的 `.rexeterm.disable`，检查选用的 `--registry-dir` 和服务的状态目录。从子项目调用时也应选用项目自己的 registry 和状态目录。
+
 ## 选择执行器与凭证
 
 准备已有权限的私有 JSON profile。证书和私钥保存在受限目录，例如团队的 `HostNet`；不需要再复制到项目。这里只使用示例域名和路径。

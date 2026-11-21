@@ -31,14 +31,19 @@ impl Installed {
             other,
         }
     }
-    fn command(&self, cwd: &Path, args: &[&str]) -> Output {
+    fn launch<T>(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+        mut start: impl FnMut(&mut Command) -> std::io::Result<T>,
+    ) -> T {
         let mut command = Command::new(&self.binary);
         command
             .args(args)
             .env_remove("REXETERM_CWD")
             .current_dir(cwd);
         for attempt in 0..10 {
-            match command.output() {
+            match start(&mut command) {
                 // A parallel test can fork while the copied executable is open
                 // for writing and briefly hold that descriptor before exec.
                 Err(error)
@@ -50,6 +55,9 @@ impl Installed {
             }
         }
         unreachable!()
+    }
+    fn command(&self, cwd: &Path, args: &[&str]) -> Output {
+        self.launch(cwd, args, Command::output)
     }
     fn ok(&self, cwd: &Path, args: &[&str]) -> String {
         let out = self.command(cwd, args);
@@ -431,13 +439,16 @@ async fn rexetermd_runs_without_cli_deadline_and_directory_disable_still_precede
     );
     assert!(!h.binary.parent().unwrap().join(".rexeterm-socket").exists());
     h.ok(cwd, &["enable"]);
-    let mut child = Command::new(&h.binary)
-        .args(["--timeout-ms", "1", "daemon", "--local"])
-        .current_dir(cwd)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child = h.launch(
+        cwd,
+        &["--timeout-ms", "1", "daemon", "--local"],
+        |command| {
+            command
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+        },
+    );
     let ready = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             if let Ok(Some((id, _))) = read_binding(cwd) {
@@ -495,34 +506,15 @@ async fn long_install_path_keeps_the_socket_beside_the_binary() {
     std::fs::create_dir(&long).unwrap();
     let binary = long.join("rexeterm");
     std::fs::copy(&h.binary, &binary).unwrap();
-    h.binary = binary.clone();
-    let out = Command::new(&binary)
-        .args(["service", "create"])
-        .current_dir(h.root.path())
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    h.binary = binary;
+    h.ok(h.root.path(), &["service", "create"]);
     let registry = Registry::open(Some(long.join(".rexeterm-socket"))).unwrap();
     let id = h.id(h.root.path());
     let record = registry.resolve(&id).unwrap();
     assert!(record.target.unwrap().len() > 108);
     h.ok(&h.other, &["service", "bind", &id]);
-    let out = Command::new(&binary)
-        .arg("info")
-        .current_dir(&h.other)
-        .output()
-        .unwrap();
-    assert!(out.status.success());
-    let out = Command::new(&binary)
-        .args(["service", "stop"])
-        .current_dir(&h.other)
-        .output()
-        .unwrap();
-    assert!(out.status.success());
+    h.ok(&h.other, &["info"]);
+    h.ok(&h.other, &["service", "stop"]);
 }
 
 #[test]

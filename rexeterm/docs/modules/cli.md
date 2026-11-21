@@ -57,9 +57,14 @@ UUID64 保留至系统重启；CLI 退出或 daemon 停止/重启不使其失效
 
 ## 目录禁用标记
 
-[directory.rs](../../crates/cli-host/src/directory.rs) 在任何配置、注册表或启动操作之前检查 cwd 的
-`.rexeterm.disable`。`enable`、`disable` 和帮助可在禁用状态使用。
-标记也阻止从该 cwd 启动 daemon，不会停止已经运行的宿主。
+[directory.rs](../../crates/cli-host/src/directory.rs) 在读取配置、发现宿主或启动 daemon 前检查当前 cwd 的
+`.rexeterm.disable`。`enable`、`disable` 和帮助可在禁用状态使用。cwd 检查不向父目录递归。
+
+使用 registry 或创建、启动宿主时，也检查存储路径上的标记。标记覆盖所在目录、直属存储目录，以及该目录下
+`.rexeterm/`、`.rexeterm-config/` 和 `.rexeterm-socket/` 中的存储。显式传 `--registry-dir` 或
+`--config-dir`、从其他 cwd 调用、通过符号链接指向同一位置，都不会绕过检查。
+例如，共享根目录的标记拒绝使用根下的 `.rexeterm-config`；子项目可以继续使用自己的 `.rexeterm/runtime`。
+新增标记不会主动停止已经运行的宿主。
 
 ## 相关文档
 
