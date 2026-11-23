@@ -99,6 +99,40 @@ impl Drop for Installed {
 }
 
 #[cfg(unix)]
+async fn wait_for_pty_output(client: &IpcClient, id: &str, bytes: usize, exit_code: Option<i64>) {
+    use std::time::Duration;
+    use tokio::time::{sleep, timeout};
+
+    let mut reply = serde_json::Value::Null;
+    let waited = timeout(Duration::from_secs(10), async {
+        loop {
+            reply = client
+                .call(
+                    "tasks.read",
+                    json!({"host":"local","id":id,"since":bytes - 1,"wait_ms":200}),
+                )
+                .await
+                .unwrap();
+            let meta = &reply["metadata"];
+            assert!(meta["terminalOutput"]["error"].is_null(), "{reply}");
+            if meta["next_offset"]
+                .as_u64()
+                .is_some_and(|end| end >= bytes as u64)
+                && exit_code.is_none_or(|code| meta["exitCode"].as_i64() == Some(code))
+            {
+                return;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(
+        waited.is_ok(),
+        "waiting for {bytes} PTY bytes and exit code {exit_code:?}: {reply}"
+    );
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn pty_screen_and_png_keep_the_menu_after_incremental_input() {
     let h = Installed::new();
@@ -107,51 +141,33 @@ async fn pty_screen_and_png_keep_the_menu_after_incremental_input() {
     let command = r#"stty -echo; printf '\033[?1049h\033[2J\033[1;1HMenu header\033[2;1H\033[7mFirst\033[0m\033[3;1HSecond\033[4;1HQuit'; IFS= read -r key; printf '\033[2;1HFirst\033[3;1H\033[7mSecond\033[0m'; IFS= read -r key; printf '\033[?1049l\377END'; exit 7"#;
     let initial = b"\x1b[?1049h\x1b[2J\x1b[1;1HMenu header\x1b[2;1H\x1b[7mFirst\x1b[0m\x1b[3;1HSecond\x1b[4;1HQuit";
     let delta = b"\x1b[2;1HFirst\x1b[3;1H\x1b[7mSecond\x1b[0m";
-    let start = h.ok(
-        cwd,
-        &[
-            "--pty",
-            "30x5",
-            "-t",
-            "1000",
-            "--cmd",
-            command,
-            "--png",
-            "before.png",
-            "--raw",
-            "before.bin",
-        ],
-    );
+    let start = h.ok(cwd, &["--pty", "30x5", "-t", "0", "--cmd", command]);
     let id = start
         .lines()
         .find_map(|line| line.strip_prefix(">asyncID: "))
         .unwrap()
         .trim_matches('`');
+    let client = h.client(&h.id(cwd));
+    // A snapshot may precede the child shell or the daemon's stream reader.
+    // Wait for each expected chunk before checking its rendered screen.
+    wait_for_pty_output(&client, id, initial.len(), None).await;
+    let before = h.ok(
+        cwd,
+        &["-A", id, "--png", "before.png", "--raw", "before.bin"],
+    );
     assert!(
-        start.contains("Menu header\nFirst\nSecond\nQuit"),
-        "{start}"
+        before.contains("Menu header\nFirst\nSecond\nQuit"),
+        "{before}"
     );
     assert_eq!(std::fs::read(cwd.join("before.bin")).unwrap(), initial);
-    let updated = h.ok(
-        cwd,
-        &[
-            "-A",
-            id,
-            "--text",
-            "next\n",
-            "-t",
-            "500",
-            "--png",
-            "after.png",
-            "--raw",
-            "after.bin",
-        ],
-    );
+    h.ok(cwd, &["-A", id, "--text", "next\n", "-t", "0"]);
+    let expected = [initial.as_slice(), delta.as_slice()].concat();
+    wait_for_pty_output(&client, id, expected.len(), None).await;
+    let updated = h.ok(cwd, &["-A", id, "--png", "after.png", "--raw", "after.bin"]);
     assert!(
         updated.contains("Menu header\nFirst\nSecond\nQuit"),
         "{updated}"
     );
-    let expected = [initial.as_slice(), delta.as_slice()].concat();
     assert_eq!(std::fs::read(cwd.join("after.bin")).unwrap(), expected);
     // The next CLI process sees the same selected row without consuming the screen.
     let tui = h.ok(cwd, &["-A", id, "--tui"]);
@@ -203,13 +219,12 @@ async fn pty_screen_and_png_keep_the_menu_after_incremental_input() {
         "incremental selection makes it to PNG"
     );
 
-    let exit = h.ok(cwd, &["-A", id, "--text", "quit\n", "-t", "1000"]);
+    h.ok(cwd, &["-A", id, "--text", "quit\n", "-t", "0"]);
+    let complete = [expected.as_slice(), b"\x1b[?1049l\xffEND"].concat();
+    wait_for_pty_output(&client, id, complete.len(), Some(7)).await;
+    let exit = h.ok(cwd, &["-A", id, "--read", "--raw", "complete.bin"]);
     assert!(exit.contains(">exitCode: 7"), "{exit}");
-    h.ok(cwd, &["-A", id, "--read", "--raw", "complete.bin"]);
-    assert_eq!(
-        std::fs::read(cwd.join("complete.bin")).unwrap(),
-        [expected.as_slice(), b"\x1b[?1049l\xffEND"].concat()
-    );
+    assert_eq!(std::fs::read(cwd.join("complete.bin")).unwrap(), complete);
 }
 
 #[tokio::test]
