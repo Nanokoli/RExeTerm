@@ -11,6 +11,7 @@ RexETerm 提供完整 App、普通 MCP stdio、普通 HTTP 宿主，以及连接
 | MCP stdio | 单进程内嵌 daemon、AppCore、mcp-stdio-adapt | 已实现普通 MCP；不提供 HTTP 运行模式 |
 | HTTP 宿主 | daemon、AppCore、Application、http-adapt | REST、PTY WebSocket、SSE、Unix IPC |
 | CLI | UUID64 绑定的本机客户端 | 创建/启停 CLI 宿主，按当前目录绑定，复用 RE 身份与偏好 |
+| [RexE Term for VS Code](rexeterm-vscode-ext/README.md) | VS Code 扩展与本机 CLI 宿主 | 浏览和编辑执行器文件，使用 PTY、文件传输和端口转发 |
 
 daemon 是共用后台模块。普通 HTTP 宿主提供 REST、二进制 PTY WebSocket、SSE 和本地 Unix IPC；CLI 复用宿主身份。
 

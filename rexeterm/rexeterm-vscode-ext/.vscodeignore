@@ -1,0 +1,9 @@
+.git/**
+.github/**
+.run/**
+dist/**
+node_modules/**
+test/**
+package-lock.json
+.gitignore
+.vscodeignore

@@ -1,0 +1,7 @@
+.run/
+dist/
+node_modules/
+.rexeterm/
+.rexeterm-config/
+RexETermHostUUID.txt
+*.vsix

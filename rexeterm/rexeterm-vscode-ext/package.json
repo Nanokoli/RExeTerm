@@ -1,0 +1,420 @@
+{
+  "name": "rexeterm-vscode-ext",
+  "displayName": "RexE Term",
+  "description": "RexE remote folders, terminals, file transfers and ports in VS Code.",
+  "version": "0.1.1",
+  "publisher": "rexeterm",
+  "engines": {
+    "vscode": "^1.100.0",
+    "node": ">=22"
+  },
+  "categories": [
+    "Other"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Nanokoli/RExeTerm.git",
+    "directory": "rexeterm/rexeterm-vscode-ext"
+  },
+  "main": "./src/extension.js",
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onFileSystem:rexeterm",
+    "onTerminalProfile:rexeterm.terminalProfile"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": {
+      "supported": true
+    },
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "package": "vsce package --no-dependencies --skip-license --out dist/"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "4.1.1"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "rexeterm.openFolder",
+        "title": "%command.openFolder%",
+        "category": "RexE",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "rexeterm.startService",
+        "title": "%command.startService%",
+        "category": "RexE",
+        "icon": "$(play)"
+      },
+      {
+        "command": "rexeterm.refresh",
+        "title": "%command.refresh%",
+        "category": "RexE",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "rexeterm.settings",
+        "title": "%command.settings%",
+        "category": "RexE",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "rexeterm.addExecutor",
+        "title": "%command.addExecutor%",
+        "category": "RexE",
+        "icon": "$(add)"
+      },
+      {
+        "command": "rexeterm.linkCredential",
+        "title": "%command.linkCredential%",
+        "category": "RexE",
+        "icon": "$(key)"
+      },
+      {
+        "command": "rexeterm.connect",
+        "title": "%command.connect%",
+        "category": "RexE",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "rexeterm.chooseExecutorAction",
+        "title": "%command.chooseExecutorAction%",
+        "category": "RexE",
+        "icon": "$(remote)"
+      },
+      {
+        "command": "rexeterm.executorInfo",
+        "title": "%command.executorInfo%",
+        "category": "RexE",
+        "icon": "$(info)"
+      },
+      {
+        "command": "rexeterm.disconnect",
+        "title": "%command.disconnect%",
+        "category": "RexE",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "rexeterm.newTerminal",
+        "title": "%command.newTerminal%",
+        "category": "RexE",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "rexeterm.attachTerminal",
+        "title": "%command.attachTerminal%",
+        "category": "RexE",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "rexeterm.stopTerminal",
+        "title": "%command.stopTerminal%",
+        "category": "RexE",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "rexeterm.upload",
+        "title": "%command.upload%",
+        "category": "RexE",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "rexeterm.download",
+        "title": "%command.download%",
+        "category": "RexE",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "rexeterm.transferInfo",
+        "title": "%command.transferInfo%",
+        "category": "RexE",
+        "icon": "$(info)"
+      },
+      {
+        "command": "rexeterm.cancelTransfer",
+        "title": "%command.cancelTransfer%",
+        "category": "RexE",
+        "icon": "$(close)"
+      },
+      {
+        "command": "rexeterm.forwardPort",
+        "title": "%command.forwardPort%",
+        "category": "RexE",
+        "icon": "$(add)"
+      },
+      {
+        "command": "rexeterm.showPorts",
+        "title": "%command.showPorts%",
+        "category": "RexE",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "rexeterm.forwardInfo",
+        "title": "%command.forwardInfo%",
+        "category": "RexE",
+        "icon": "$(info)"
+      },
+      {
+        "command": "rexeterm.stopForward",
+        "title": "%command.stopForward%",
+        "category": "RexE",
+        "icon": "$(close)"
+      }
+    ],
+    "configuration": {
+      "title": "RexE",
+      "properties": {
+        "rexeterm.cliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "%config.cliPath%"
+        },
+        "rexeterm.clientDirectory": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "%config.clientDirectory%"
+        },
+        "rexeterm.registryDirectory": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "%config.registryDirectory%"
+        }
+      }
+    },
+    "views": {
+      "rexeterm": [
+        {
+          "id": "rexeterm.active",
+          "name": "%view.active%",
+          "visibility": "visible"
+        },
+        {
+          "id": "rexeterm.saved",
+          "name": "%view.saved%",
+          "visibility": "collapsed"
+        },
+        {
+          "id": "rexeterm.credentials",
+          "name": "%view.credentials%",
+          "visibility": "collapsed"
+        }
+      ],
+      "rexeterm-ports": [
+        {
+          "id": "rexeterm.ports",
+          "name": "%view.ports%"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "rexeterm",
+          "title": "RexE Term",
+          "icon": "media/rexe.svg"
+        }
+      ],
+      "panel": [
+        {
+          "id": "rexeterm-ports",
+          "title": "RexE Ports",
+          "icon": "media/rexe.svg"
+        }
+      ]
+    },
+    "resourceLabelFormatters": [
+      {
+        "scheme": "rexeterm",
+        "authority": "*",
+        "formatting": {
+          "label": "${path}",
+          "separator": "/",
+          "workspaceSuffix": "RexE",
+          "workspaceTooltip": "RexE Term workspace"
+        }
+      }
+    ],
+    "terminal": {
+      "profiles": [
+        {
+          "title": "RexE",
+          "id": "rexeterm.terminalProfile",
+          "icon": "terminal"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "rexeterm.newTerminal",
+        "key": "ctrl+alt+shift+t",
+        "mac": "cmd+alt+shift+t",
+        "when": "rexeterm.workspace"
+      }
+    ],
+    "menus": {
+      "file/newFile": [
+        {
+          "command": "rexeterm.openFolder",
+          "group": "RexE"
+        }
+      ],
+      "statusBar/remoteIndicator": [
+        {
+          "command": "rexeterm.openFolder",
+          "group": "remote_1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "rexeterm.attachTerminal",
+          "when": "false"
+        },
+        {
+          "command": "rexeterm.stopTerminal",
+          "when": "false"
+        },
+        {
+          "command": "rexeterm.transferInfo",
+          "when": "false"
+        },
+        {
+          "command": "rexeterm.cancelTransfer",
+          "when": "false"
+        },
+        {
+          "command": "rexeterm.forwardInfo",
+          "when": "false"
+        },
+        {
+          "command": "rexeterm.stopForward",
+          "when": "false"
+        },
+        {
+          "command": "rexeterm.disconnect",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "rexeterm.openFolder",
+          "when": "view == rexeterm.active",
+          "group": "navigation@1"
+        },
+        {
+          "command": "rexeterm.connect",
+          "when": "view == rexeterm.active",
+          "group": "navigation@2"
+        },
+        {
+          "command": "rexeterm.refresh",
+          "when": "view == rexeterm.active",
+          "group": "navigation@3"
+        },
+        {
+          "command": "rexeterm.settings",
+          "when": "view == rexeterm.active",
+          "group": "navigation@4"
+        },
+        {
+          "command": "rexeterm.addExecutor",
+          "when": "view == rexeterm.saved",
+          "group": "navigation@1"
+        },
+        {
+          "command": "rexeterm.linkCredential",
+          "when": "view == rexeterm.credentials",
+          "group": "navigation@1"
+        },
+        {
+          "command": "rexeterm.forwardPort",
+          "when": "view == rexeterm.ports",
+          "group": "navigation@1"
+        },
+        {
+          "command": "rexeterm.refresh",
+          "when": "view == rexeterm.ports",
+          "group": "navigation@2"
+        },
+        {
+          "command": "rexeterm.newTerminal",
+          "when": "view == terminal && rexeterm.workspace",
+          "group": "navigation@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "rexeterm.connect",
+          "when": "viewItem == savedOffline",
+          "group": "inline@1"
+        },
+        {
+          "command": "rexeterm.openFolder",
+          "when": "viewItem == online || viewItem == folder",
+          "group": "inline@1"
+        },
+        {
+          "command": "rexeterm.executorInfo",
+          "when": "viewItem == online",
+          "group": "inline@2"
+        },
+        {
+          "command": "rexeterm.newTerminal",
+          "when": "viewItem == online || viewItem == folder || viewItem == pty",
+          "group": "2_rexeterm@1"
+        },
+        {
+          "command": "rexeterm.disconnect",
+          "when": "viewItem == online",
+          "group": "2_rexeterm@4"
+        },
+        {
+          "command": "rexeterm.stopTerminal",
+          "when": "viewItem == ptyRunning",
+          "group": "inline@1"
+        },
+        {
+          "command": "rexeterm.cancelTransfer",
+          "when": "viewItem == transferRunning",
+          "group": "inline@1"
+        },
+        {
+          "command": "rexeterm.stopForward",
+          "when": "viewItem == forward",
+          "group": "inline@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "rexeterm.newTerminal",
+          "when": "resourceScheme == rexeterm && explorerResourceIsFolder",
+          "group": "rexeterm@1"
+        },
+        {
+          "command": "rexeterm.upload",
+          "when": "resourceScheme == rexeterm && explorerResourceIsFolder",
+          "group": "rexeterm@2"
+        },
+        {
+          "command": "rexeterm.download",
+          "when": "resourceScheme == rexeterm && !explorerResourceIsFolder",
+          "group": "rexeterm@2"
+        },
+        {
+          "command": "rexeterm.forwardPort",
+          "when": "resourceScheme == rexeterm && explorerResourceIsFolder",
+          "group": "rexeterm@3"
+        }
+      ]
+    }
+  }
+}
