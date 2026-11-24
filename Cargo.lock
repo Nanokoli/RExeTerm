@@ -3239,7 +3239,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "remote_executor"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "clap",
@@ -3254,7 +3254,7 @@ dependencies = [
 
 [[package]]
 name = "remote_executor_data"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "remote_executor_protocol",
@@ -3267,7 +3267,7 @@ dependencies = [
 
 [[package]]
 name = "remote_executor_protocol"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "serde",
  "serde_json",
@@ -3275,7 +3275,7 @@ dependencies = [
 
 [[package]]
 name = "remote_executor_server"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "argon2",
@@ -3308,7 +3308,7 @@ dependencies = [
 
 [[package]]
 name = "remote_executor_terminal"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "portable-pty",
@@ -3317,7 +3317,7 @@ dependencies = [
 
 [[package]]
 name = "remote_executor_transport"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -3403,7 +3403,7 @@ dependencies = [
 
 [[package]]
 name = "rexe-client"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "rand 0.9.5",
@@ -3418,7 +3418,7 @@ dependencies = [
 
 [[package]]
 name = "rexeterm"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "clap",
@@ -3444,14 +3444,14 @@ dependencies = [
 
 [[package]]
 name = "rexeterm-adapter-common"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "rexeterm-app"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "regex",
@@ -3468,7 +3468,7 @@ dependencies = [
 
 [[package]]
 name = "rexeterm-appcore"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "avt",
@@ -3482,7 +3482,7 @@ dependencies = [
 
 [[package]]
 name = "rexeterm-application"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "regex",
@@ -3495,7 +3495,7 @@ dependencies = [
 
 [[package]]
 name = "rexeterm-cli"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "avt",
@@ -3520,7 +3520,7 @@ dependencies = [
 
 [[package]]
 name = "rexeterm-cli-host"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "libc",
@@ -3535,7 +3535,7 @@ dependencies = [
 
 [[package]]
 name = "rexeterm-config"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "serde",
@@ -3547,7 +3547,7 @@ dependencies = [
 
 [[package]]
 name = "rexeterm-daemon"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "remote_executor_server",
@@ -3558,7 +3558,7 @@ dependencies = [
 
 [[package]]
 name = "rexeterm-desktop"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "rexeterm-app",
  "serde_json",
@@ -3569,7 +3569,7 @@ dependencies = [
 
 [[package]]
 name = "rexeterm-http-adapt"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3589,7 +3589,7 @@ dependencies = [
 
 [[package]]
 name = "rexeterm-mcp-common"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "rexeterm-appcore",
  "serde_json",
@@ -3597,7 +3597,7 @@ dependencies = [
 
 [[package]]
 name = "rexeterm-mcp-http-adapt"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "axum",
@@ -3611,7 +3611,7 @@ dependencies = [
 
 [[package]]
 name = "rexeterm-mcp-stdio-adapt"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "rexeterm-adapter-common",

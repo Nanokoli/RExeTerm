@@ -1,6 +1,6 @@
 [package]
 name = "rexeterm-http-adapt"
-version = "0.2.13"
+version = "0.2.14"
 edition = "2021"
 [dependencies]
 rexeterm-application = { path = "../application" }

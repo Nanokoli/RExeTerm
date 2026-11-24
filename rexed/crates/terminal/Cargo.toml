@@ -1,6 +1,6 @@
 [package]
 name = "remote_executor_terminal"
-version = "0.2.13"
+version = "0.2.14"
 edition = "2021"
 description = "RemoteExecutor native PTY sessions, output and process lifecycle"
 

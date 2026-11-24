@@ -1,6 +1,6 @@
 [package]
 name = "remote_executor_protocol"
-version = "0.2.13"
+version = "0.2.14"
 edition = "2021"
 description = "RemoteExecutor wire contracts shared by clients and servers"
 [dependencies]

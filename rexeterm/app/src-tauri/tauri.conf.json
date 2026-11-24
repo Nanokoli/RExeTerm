@@ -1,6 +1,6 @@
 {
   "productName": "RexETerm",
-  "version": "0.2.13",
+  "version": "0.2.14",
   "identifier": "dev.rexeterm.app",
   "build": { "frontendDist": "../frontend" },
   "app": {

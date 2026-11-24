@@ -1,6 +1,6 @@
 [package]
 name = "rexe-client"
-version = "0.2.13"
+version = "0.2.14"
 edition = "2021"
 description = "RemoteExecutor node discovery, routing and WebSocket client"
 [features]

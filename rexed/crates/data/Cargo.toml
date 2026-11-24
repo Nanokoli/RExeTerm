@@ -1,6 +1,6 @@
 [package]
 name = "remote_executor_data"
-version = "0.2.13"
+version = "0.2.14"
 edition = "2021"
 description = "Link-independent stream forwarding data protocol"
 [dependencies]
