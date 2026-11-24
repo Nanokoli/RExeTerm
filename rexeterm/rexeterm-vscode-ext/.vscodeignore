@@ -3,6 +3,7 @@
 .run/**
 dist/**
 node_modules/**
+scripts/**
 test/**
 package-lock.json
 .gitignore

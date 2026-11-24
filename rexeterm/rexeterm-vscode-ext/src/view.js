@@ -88,12 +88,10 @@ class RexEViews {
             }
             if (view === 'ports') {
                 if (m.error) return [empty(m.error, 'warning')];
-                if (!m.running) return [empty('Start the RexETerm service first')];
                 const forwards = await this.model.client().forwards();
                 return forwards.length ? this.showForwards(forwards) : [empty('No forwarded ports', 'plug')];
             }
             if (m.error) return [empty(m.error, 'warning')];
-            if (!m.running) return [action('Start RexETerm Service', 'play', 'startService')];
             if (!m.online.length) return [empty('No active executors')];
             return m.online.map(executor => {
                 const selected = executor.id === this.model.selectedId;

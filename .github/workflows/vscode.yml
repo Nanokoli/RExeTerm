@@ -1,0 +1,74 @@
+name: RexE Term for VS Code
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/vscode.yml"
+      - "Cargo.*"
+      - "rexed/**"
+      - "rexeterm/crates/**"
+      - "rexeterm/rexeterm-vscode-ext/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vsix:
+    name: VSIX (${{ matrix.vsix }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - vsix: linux-x64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            cross: true
+            suffix: ""
+          - vsix: linux-arm64
+            runner: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            cross: true
+            suffix: ""
+          - vsix: win32-x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            cross: false
+            suffix: ".exe"
+    env:
+      REXETERM_BUILD_ID: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: cargo install cross --locked
+        if: matrix.cross
+      - run: >-
+          cross build --locked --release -p rexeterm-cli --bin rexeterm-vscode-backend
+          --target ${{ matrix.target }}
+        if: matrix.cross
+      - run: >-
+          cargo build --locked --release -p rexeterm-cli --bin rexeterm-vscode-backend
+          --target ${{ matrix.target }}
+        if: ${{ !matrix.cross }}
+      - run: npm ci
+        working-directory: rexeterm/rexeterm-vscode-ext
+      - run: npm test
+        working-directory: rexeterm/rexeterm-vscode-ext
+      - run: >-
+          npm run package -- ${{ matrix.vsix }}
+          ../../target/${{ matrix.target }}/release/rexeterm-vscode-backend${{ matrix.suffix }}
+        working-directory: rexeterm/rexeterm-vscode-ext
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rexeterm-vscode-ext-${{ matrix.vsix }}
+          path: rexeterm/rexeterm-vscode-ext/dist/*.vsix
+          if-no-files-found: error

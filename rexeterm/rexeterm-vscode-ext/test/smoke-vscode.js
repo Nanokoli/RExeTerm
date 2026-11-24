@@ -33,9 +33,9 @@ exports.run = async () => {
     assert.equal(root?.scheme, 'rexeterm');
     const settings = workspace.getConfiguration('rexeterm');
     const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'rexe-smoke-'));
-    const api = new RexE({
-        cli: settings.get('cliPath'), directory: settings.get('clientDirectory'), registry: settings.get('registryDirectory'), scratch,
-    });
+    const storage = process.env.REXE_SMOKE_STORAGE;
+    assert(storage, 'Set REXE_SMOKE_STORAGE to the test profile extension storage.');
+    const api = RexE.forExtension(installed.extensionPath, storage, settings.get('clientDirectory'), settings.get('localExecutor'));
     const target = fromUri(root);
     const testFolder = Uri.joinPath(root, 'rexe-smoke ' + Date.now());
     const file = Uri.joinPath(testFolder, "资料 ' #%.txt"), renamed = Uri.joinPath(testFolder, 'renamed.txt');
@@ -44,7 +44,7 @@ exports.run = async () => {
     const report = { executor: target.id, system: process.platform, folder: target.path, checks: [] };
     let terminal, server, forward;
     try {
-        assert(await api.serviceInfo().then(value => value.running), 'CLI service not running');
+        assert((await api.online()).executors.some(executor => executor.id === target.id), 'Executor is not connected');
         assert.equal((await workspace.fs.stat(root)).type, FileType.Directory);
         await commands.executeCommand('rexeterm.active.focus');
         await workspace.fs.createDirectory(testFolder);

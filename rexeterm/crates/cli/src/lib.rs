@@ -18,5 +18,8 @@ pub mod preferences;
 #[cfg(feature = "ipc-client")]
 pub mod services;
 
+#[cfg(feature = "daemon")]
+pub mod host;
+
 #[cfg(feature = "ipc-client")]
 pub use rexeterm_cli_host::directory;

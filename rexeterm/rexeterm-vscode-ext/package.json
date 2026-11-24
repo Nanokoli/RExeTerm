@@ -2,7 +2,7 @@
   "name": "rexeterm-vscode-ext",
   "displayName": "RexE Term",
   "description": "RexE remote folders, terminals, file transfers and ports in VS Code.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "rexeterm",
   "engines": {
     "vscode": "^1.100.0",
@@ -34,7 +34,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.js",
-    "package": "vsce package --no-dependencies --skip-license --out dist/"
+    "package": "node scripts/package.js"
   },
   "devDependencies": {
     "@vscode/vsce": "4.1.1"
@@ -171,23 +171,17 @@
     "configuration": {
       "title": "RexE",
       "properties": {
-        "rexeterm.cliPath": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "description": "%config.cliPath%"
-        },
         "rexeterm.clientDirectory": {
           "type": "string",
           "default": "",
           "scope": "machine",
           "description": "%config.clientDirectory%"
         },
-        "rexeterm.registryDirectory": {
-          "type": "string",
-          "default": "",
+        "rexeterm.localExecutor": {
+          "type": "boolean",
+          "default": false,
           "scope": "machine",
-          "description": "%config.registryDirectory%"
+          "description": "%config.localExecutor%"
         }
       }
     },

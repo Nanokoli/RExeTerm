@@ -1,8 +1,8 @@
 //! A jump chain owns ordinary online executors and local TCP forwards.
+use crate::executors::validate_alias;
 use anyhow::{anyhow, ensure, Context, Result};
 use rexeterm_appcore::{client::ConnectExecutorOptions, config};
 use rexeterm_application::Application;
-use rexeterm_cli::executors::validate_alias;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use tokio::time::{timeout_at, Duration, Instant};

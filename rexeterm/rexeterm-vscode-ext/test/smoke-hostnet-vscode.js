@@ -29,10 +29,9 @@ exports.run = async () => {
     const fixtures = JSON.parse(await fs.readFile(process.env.REXE_MULTI_FIXTURES, 'utf8'));
     const destination = process.env.REXE_MULTI_REPORT;
     const settings = workspace.getConfiguration('rexeterm');
-    const api = new RexE({
-        cli: settings.get('cliPath'), directory: settings.get('clientDirectory'),
-        registry: settings.get('registryDirectory'), scratch: path.join(path.dirname(destination), 'scratch'),
-    });
+    const storage = process.env.REXE_SMOKE_STORAGE;
+    assert(storage, 'Set REXE_SMOKE_STORAGE to the test profile extension storage.');
+    const api = RexE.forExtension(extension.extensionPath, storage, settings.get('clientDirectory'), settings.get('localExecutor'));
     const report = { version: extension.packageJSON.version, simultaneousFolders: 0, simultaneousPTYs: 0, targets: [] };
     const read = async uri => Buffer.from(await workspace.fs.readFile(uri)).toString('utf8');
     const items = fixtures.map(target => {

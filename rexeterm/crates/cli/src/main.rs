@@ -1,9 +1,8 @@
 use clap::Parser;
 use rexeterm_cli::{
     commands::{self, Args},
-    markdown,
+    host, markdown,
 };
-mod host;
 use std::{
     io::{self, Write},
     process::ExitCode,

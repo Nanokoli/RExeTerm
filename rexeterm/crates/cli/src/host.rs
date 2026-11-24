@@ -5,13 +5,13 @@ mod routes;
 mod screen;
 mod screenshot;
 mod transfers;
-use anyhow::{anyhow, ensure, Result};
-use rexeterm_appcore::protocol::management::ClientHello;
-use rexeterm_application::{Application, Workspace};
-use rexeterm_cli::{
+use crate::{
     directory,
     services::{self, DaemonArgs},
 };
+use anyhow::{anyhow, ensure, Result};
+use rexeterm_appcore::protocol::management::ClientHello;
+use rexeterm_application::{Application, Workspace};
 use rexeterm_cli_host::{
     ipc::{self, Request, Response},
     Registry,

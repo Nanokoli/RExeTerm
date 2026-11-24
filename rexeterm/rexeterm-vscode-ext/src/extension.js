@@ -72,11 +72,6 @@ async function activate(ctx) {
         const specified = raw.executor?.id || raw.saved?.id || raw.row?.executor || fromGivenUri;
         const state = await model.load(true);
         if (state.error) throw new Error(state.error);
-        if (!state.running) {
-            if (!(await promptStart())) return undefined;
-            if (!model.cached?.running) throw new Error('RexETerm did not start.');
-            return onlineExecutor(argument, { chooseExecutor, workspaceId });
-        }
         if (specified) {
             const executor = state.online.find(item => item.id === specified);
             if (executor) return executor;
@@ -99,14 +94,8 @@ async function activate(ctx) {
         })), { title: 'Select a RexE Executor' }))?.executor;
     }
 
-    async function promptStart() {
-        if ((await window.showInformationMessage('Start the RexETerm service for this VS Code profile?', 'Start Service')) !== 'Start Service') return false;
-        await start();
-        return true;
-    }
-
     async function start() {
-        await window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Starting RexETerm' }, () => model.client().ensureService());
+        await window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Starting RexE' }, () => model.client().online());
         await model.refresh();
     }
 
@@ -132,7 +121,6 @@ async function activate(ctx) {
         }
         const api = model.client();
         await window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Connecting to ' + saved.name }, async () => {
-            await api.ensureService();
             await api.connect(saved.id, credential);
         });
         await model.select(saved.id);
@@ -388,7 +376,7 @@ async function activate(ctx) {
         const root = await window.showInputBox({ title: 'Executor Start Folder', value: '/', validateInput: x => validate(x, remotePath) });
         if (!root) return;
         const api = model.client();
-        await api.run(['-e', id, 'executor', 'host', 'add', address, '--root', remotePath(root)]);
+        await api.api('executor.add', { id, url: address, root: remotePath(root) });
         await model.refresh();
     });
     guarded('linkCredential', async () => {
@@ -397,7 +385,7 @@ async function activate(ctx) {
         if (file?.scheme !== 'file') return;
         const name = await window.showInputBox({ title: 'Credential Name', validateInput: x => validate(x, niceId) });
         if (!name) return;
-        await model.client().run(['credential', 'link', name, file.fsPath]);
+        await model.client().api('credential.link', { name, profile: file.fsPath });
         await model.refresh();
     });
 

@@ -3,11 +3,9 @@
 const { execFile } = require('node:child_process');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { promisify } = require('node:util');
 const { setTimeout: delay } = require('node:timers/promises');
 const { psLiteral, shLiteral, isRoot } = require('./paths');
 
-const exec = promisify(execFile);
 const rows = value => Array.isArray(value) ? value : [];
 const string = value => typeof value === 'string' ? value : undefined;
 const publicUrl = value => string(value) && !/[@?#\r\n]/.test(value) ? value : undefined;
@@ -32,11 +30,23 @@ class Queue {
 }
 
 class RexE {
-    constructor({ cli, directory, registry, scratch }) {
-        this.cli = cli;
+    static forExtension(extension, storage, directory, local) {
+        const binary = 'rexeterm-vscode-backend' + (process.platform === 'win32' ? '.exe' : '');
+        return new RexE({
+            backend: path.join(extension, 'bin', binary),
+            directory: directory || path.join(storage, 'client'),
+            registry: path.join(storage, 'runtime'),
+            scratch: path.join(storage, 'scratch'),
+            local,
+        });
+    }
+
+    constructor({ backend, directory, registry, scratch, local }) {
+        this.backend = backend;
         this.directory = directory;
         this.registry = registry;
         this.scratch = scratch;
+        this.local = local;
         this.queue = new Queue(8);
         this.ready = undefined;
     }
@@ -49,29 +59,25 @@ class RexE {
         await this.ready;
     }
 
-    async run(args, timeout = 15_000) {
+    async api(operation, args = {}, timeout = 15_000) {
         await this.workspace();
-        return this.queue.run(async () => {
-            try {
-                const result = await exec(this.cli, [
-                    '--registry-dir', this.registry, '--timeout-ms', String(timeout), ...args,
-                ], {
-                    cwd: this.directory,
-                    env: { ...process.env, REXETERM_CWD: this.directory },
-                    windowsHide: true, timeout: timeout + 2_000, maxBuffer: 2 * 1024 * 1024,
-                });
-                return result.stdout;
-            } catch (error) {
-                if (error.code === 'ENOENT') {
-                    throw new Error('RexETerm CLI was not found. Set RexE › CLI Path to rexeterm-cli' + (process.platform === 'win32' ? '.exe.' : '.'));
+        const argv = ['--registry-dir', this.registry, ...(this.local ? ['--local'] : [])];
+        return this.queue.run(() => new Promise((resolve, reject) => {
+            const proc = execFile(this.backend, argv, {
+                cwd: this.directory, windowsHide: true, timeout, maxBuffer: 8 * 1024 * 1024,
+            }, (error, stdout, stderr) => {
+                if (error?.code === 'ENOENT' || error?.code === 'EACCES') {
+                    return reject(new Error('RexE backend could not start. Reinstall the RexE Term VSIX for this platform.'));
                 }
-                if (error.killed) throw new Error('RexETerm did not answer before the timeout.');
-                const response = [error.stderr, error.stdout].find(value => value && value.trim());
-                const message = response?.match(/___\r?\n([\s\S]*?)\r?\n___/)?.[1]
-                    ?? response?.trim() ?? 'RexETerm CLI failed (' + error.code + ').';
-                throw new Error(message.slice(0, 1000));
-            }
-        });
+                if (error?.killed) return reject(new Error('RexE did not answer before the timeout.'));
+                if (error) return reject(new Error(stderr.trim().slice(0, 1000) || 'RexE backend failed (' + error.code + ').'));
+                try { resolve(JSON.parse(stdout)); }
+                catch { reject(new Error('RexE backend returned an invalid response.')); }
+            });
+            // Exit status and stderr report failures even if the child closes its pipe immediately.
+            proc.stdin?.on('error', () => {});
+            proc.stdin?.end(JSON.stringify({ operation, args }));
+        }));
     }
 
     async temporary(action) {
@@ -81,35 +87,12 @@ class RexE {
         finally { await fs.rm(dir, { recursive: true, force: true, maxRetries: 2 }).catch(() => {}); }
     }
 
-    async api(operation, args = {}, timeout) {
-        return this.temporary(async dir => {
-            const input = path.join(dir, 'in.json'), output = path.join(dir, 'out.json');
-            await fs.writeFile(input, JSON.stringify(args), { mode: 0o600 });
-            await this.run(['api', operation, '--input', input, '--output', output], timeout);
-            return JSON.parse(await fs.readFile(output, 'utf8'));
-        });
-    }
-
     rpc(id, tool, params = {}, directory, terminal, timeout) {
         return this.api('rpc', { executor: id, tool, params, directory, terminal }, timeout);
     }
 
-    async serviceInfo() {
-        const output = await this.run(['service', 'info']);
-        return {
-            running: /^- \*\*running\*\*: true\s*$/m.test(output),
-            bound: /^- \*\*serviceId\*\*: [a-f0-9]{16}\s*$/im.test(output),
-            output,
-        };
-    }
-
-    async ensureService() {
-        const info = await this.serviceInfo();
-        if (!info.running) await this.run(['service', info.bound ? 'start' : 'create'], 30_000);
-    }
-
     async online() {
-        const value = (await this.api('list_executor')).metadata ?? {};
+        const value = (await this.api('list_executor', {}, 25_000)).metadata ?? {};
         return { executors: rows(value.executors), defaultId: string(value.default) };
     }
 
@@ -154,7 +137,7 @@ class RexE {
     }
 
     connect(id, credential) {
-        return this.run(['-e', id, ...(credential ? ['-cr', credential] : []), 'executor', 'connect'], 65_000);
+        return this.api('executor.connect', { id, credential }, 65_000);
     }
 
     stat(host, file) {

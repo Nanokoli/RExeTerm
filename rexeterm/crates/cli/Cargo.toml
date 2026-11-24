@@ -2,6 +2,7 @@
 name = "rexeterm-cli"
 version = "0.2.14"
 edition = "2021"
+default-run = "rexeterm"
 [features]
 default = ["daemon", "local"]
 daemon = ["ipc-client", "dep:rexeterm-daemon", "dep:rexeterm-application", "dep:url", "dep:avt", "dep:fontdue", "dep:png"]
@@ -14,6 +15,10 @@ http-client = ["ipc-client"]
 [[bin]]
 name = "rexeterm"
 path = "src/main.rs"
+required-features = ["daemon"]
+[[bin]]
+name = "rexeterm-vscode-backend"
+path = "src/vscode.rs"
 required-features = ["daemon"]
 [dependencies]
 rexeterm-daemon = {path="../daemon",optional=true}

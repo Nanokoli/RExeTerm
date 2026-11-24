@@ -1,4 +1,5 @@
 .run/
+bin/
 dist/
 node_modules/
 .rexeterm/

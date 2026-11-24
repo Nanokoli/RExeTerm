@@ -1,6 +1,6 @@
 {
   "command.openFolder": "打开 RexE 文件夹…",
-  "command.startService": "启动 RexETerm 服务",
+  "command.startService": "启动 RexE 后端",
   "command.refresh": "刷新",
   "command.settings": "设置",
   "command.addExecutor": "添加执行器…",
@@ -24,7 +24,6 @@
   "view.saved": "执行器",
   "view.credentials": "凭证 (CRs)",
   "view.ports": "RexE 端口",
-  "config.cliPath": "rexeterm-cli 的绝对路径，或 PATH 中的命令名。",
-  "config.clientDirectory": "现有 RexETerm CLI 项目的本机绝对路径。留空时使用 VS Code 配置中的独立项目。",
-  "config.registryDirectory": "传给 rexeterm-cli --registry-dir 的绝对路径。共用现有 CLI 服务时请设置。"
+  "config.clientDirectory": "可选的本地绝对路径，其下的 .rexeterm/config-dir 保存执行器和凭证。默认使用扩展的存储目录。",
+  "config.localExecutor": "在此 VS Code 配置中显示内置的本机执行器，使用当前用户的权限。"
 }
