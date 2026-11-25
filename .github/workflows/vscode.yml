@@ -2,7 +2,7 @@ name: RexE Term for VS Code
 
 on:
   push:
-    branches: [main]
+    branches: [main, "fix/vscode-*"]
     paths:
       - ".github/workflows/vscode.yml"
       - "Cargo.*"
