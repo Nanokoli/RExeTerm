@@ -4,8 +4,9 @@
   "command.refresh": "刷新",
   "command.settings": "设置",
   "command.addExecutor": "添加执行器…",
-  "command.linkCredential": "链接凭证…",
-  "command.connect": "连接执行器…",
+  "command.importCredential": "导入凭证…",
+  "command.addConfig": "添加连接配置…",
+  "command.connect": "按配置连接…",
   "command.chooseExecutorAction": "执行器操作…",
   "command.executorInfo": "执行器信息",
   "command.disconnect": "断开连接",
@@ -22,8 +23,9 @@
   "command.stopForward": "停止转发",
   "view.active": "活跃执行器",
   "view.saved": "执行器",
-  "view.credentials": "凭证 (CRs)",
+  "view.credentials": "凭证",
+  "view.configs": "连接配置",
   "view.ports": "RexE 端口",
-  "config.clientDirectory": "可选的本地绝对路径，其下的 .rexeterm/config-dir 保存执行器和凭证。默认使用扩展的存储目录。",
+  "config.clientDirectory": "可选的本地绝对路径，其下的 .rexeterm/config-dir 保存主机、凭证和连接配置。默认使用扩展的存储目录。",
   "config.localExecutor": "在此 VS Code 配置中显示内置的本机执行器，使用当前用户的权限。"
 }

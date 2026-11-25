@@ -69,13 +69,13 @@ async function activate(ctx) {
     async function onlineExecutor(argument, { chooseExecutor = false, workspaceId = model.workspaceId } = {}) {
         const raw = argument?.args ?? {};
         const fromGivenUri = argument?.scheme === 'rexeterm' ? fromUri(argument).id : undefined;
-        const specified = raw.executor?.id || raw.saved?.id || raw.row?.executor || fromGivenUri;
+        const specified = raw.executor?.id || raw.config?.id || raw.row?.executor || fromGivenUri;
         const state = await model.load(true);
         if (state.error) throw new Error(state.error);
         if (specified) {
             const executor = state.online.find(item => item.id === specified);
             if (executor) return executor;
-            const entry = state.saved.find(item => item.id === specified);
+            const entry = state.configs.find(item => item.id === specified);
             if (!entry) throw new Error(specified + ' is disconnected.');
             if ((await window.showInformationMessage(specified + ' is disconnected.', 'Connect')) !== 'Connect') return undefined;
             return connect(entry);
@@ -83,8 +83,8 @@ async function activate(ctx) {
         const current = state.online.find(item => item.id === (workspaceId || model.selectedId));
         if (current && workspaceId && (!chooseExecutor || state.online.length === 1)) return current;
         if (!state.online.length) {
-            if (state.saved.length && (await window.showInformationMessage('No active RexE executors.', 'Connect an Executor')) === 'Connect an Executor') return connect();
-            if (!state.saved.length) window.showInformationMessage('Add an executor in the RexE sidebar to open a remote folder.');
+            if (state.configs.length && (await window.showInformationMessage('No active RexE executors.', 'Connect a Config')) === 'Connect a Config') return connect();
+            if (!state.configs.length && (await window.showInformationMessage('Create a RexE config to connect to a host.', 'Add Config') === 'Add Config')) await addConfig();
             return undefined;
         }
         return (await window.showQuickPick(state.online.map(executor => ({
@@ -99,34 +99,36 @@ async function activate(ctx) {
         await model.refresh();
     }
 
-    async function connect(saved, preferredCredential) {
+    async function connect(config) {
         const state = await model.load(true);
         if (state.error) throw new Error(state.error);
-        if (!saved) {
-            saved = (await window.showQuickPick(state.saved.map(item => ({ label: item.name, description: item.id, detail: item.url, item })),
-                { title: 'Connect to an Executor' }))?.item;
-            if (!saved) return undefined;
+        if (!config) {
+            config = (await window.showQuickPick(state.configs.map(item => ({
+                label: model.label(item.id), description: model.routeLabel(item), detail: item.error ?? item.startPath, item,
+            })), { title: 'Connect a RexE Config' }))?.item;
+            if (!config) return undefined;
         }
-        const existing = state.online.find(item => item.id === saved.id);
+        const existing = state.online.find(item => item.id === config.id);
         if (existing) { await model.select(existing.id); return existing; }
-        let credential = preferredCredential;
+        if (config.error) throw new Error(config.error);
+        let legacyCredential;
         const credentials = state.credentials.filter(value => value.available);
-        if (!credential && credentials.length) {
+        if (config.legacy && credentials.length) {
             const answer = await window.showQuickPick([
                 { label: 'Use the executor’s saved settings', value: '' },
                 ...credentials.map(item => ({ label: '$(key) ' + item.name, value: item.name })),
-            ], { title: 'Credential for ' + saved.name });
+            ], { title: 'Credential for ' + model.label(config.id) });
             if (!answer) return undefined;
-            credential = answer.value;
+            legacyCredential = answer.value || undefined;
         }
-        const api = model.client();
-        await window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Connecting to ' + saved.name }, async () => {
-            await api.connect(saved.id, credential);
-        });
-        await model.select(saved.id);
+        await window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Connecting: ' + model.routeLabel(config) },
+            () => model.client().connect(config, legacyCredential));
+        await model.select(config.id);
         const fresh = await model.load(true);
         model.onChange();
-        return fresh.online.find(item => item.id === saved.id);
+        const executor = fresh.online.find(item => item.id === config.id);
+        if (!executor) throw new Error('The configuration is not connected: ' + config.id);
+        return executor;
     }
 
     async function browseFolder(executor, start) {
@@ -181,8 +183,10 @@ async function activate(ctx) {
         const exec = await onlineExecutor(argument);
         if (!exec) return;
         const meta = (await model.client().rpc(exec.id, '_executor_info')).metadata;
+        const config = model.config(exec.id);
         return details({
             executor: exec.id, name: model.label(exec.id), device: meta?.device ?? exec.device, system: meta?.system ?? exec.system,
+            host: config?.executor, credential: config?.credential, route: config && model.routeLabel(config),
             root: model.root(exec), version: meta?.version ?? exec.version, capabilities: meta?.capabilities,
             channels: exec.channels, client: exec.clientSession?.username,
         }, exec.id + ' Executor Info');
@@ -319,7 +323,7 @@ async function activate(ctx) {
     guarded('refresh', () => model.refresh());
     guarded('startService', start);
     guarded('settings', () => commands.executeCommand('workbench.action.openSettings', '@ext:rexeterm.rexeterm-vscode-ext'));
-    guarded('connect', item => connect(item?.args?.saved, item?.args?.credential?.name));
+    guarded('connect', item => connect(item?.args?.config));
     guarded('chooseExecutorAction', selectAction);
     guarded('disconnect', async item => {
         const executor = await onlineExecutor(item);
@@ -373,21 +377,55 @@ async function activate(ctx) {
         const address = await window.showInputBox({ title: 'Executor Endpoint', placeHolder: 'tls://host:45957',
             validateInput: x => /^(tls|tcp|wss?|unix):\/\/[^\s]+$/.test(x) && !/[@?#]/.test(x) ? undefined : 'Enter a RexE endpoint, such as tls://host:45957.' });
         if (!address) return;
-        const root = await window.showInputBox({ title: 'Executor Start Folder', value: '/', validateInput: x => validate(x, remotePath) });
-        if (!root) return;
-        const api = model.client();
-        await api.api('executor.add', { id, url: address, root: remotePath(root) });
+        await model.client().api('executor.add', { id, url: address });
         await model.refresh();
     });
-    guarded('linkCredential', async () => {
+    guarded('importCredential', async () => {
         const [file] = await window.showOpenDialog({ filters: { 'RexETerm profile': ['json'] },
-            openLabel: 'Link Credential Profile', availableFileSystems: ['file'] }) ?? [];
+            openLabel: 'Import Credential', availableFileSystems: ['file'] }) ?? [];
         if (file?.scheme !== 'file') return;
         const name = await window.showInputBox({ title: 'Credential Name', validateInput: x => validate(x, niceId) });
         if (!name) return;
-        await model.client().api('credential.link', { name, profile: file.fsPath });
+        await model.client().api('credential.import', { name, profile: file.fsPath });
         await model.refresh();
     });
+    async function addConfig(hostHint) {
+        const state = await model.load(true);
+        if (!state.executors.length) {
+            if (await window.showInformationMessage('Add a host before creating a config.', 'Add Executor') === 'Add Executor') {
+                await commands.executeCommand('rexeterm.addExecutor');
+            }
+            return;
+        }
+        const credentials = state.credentials.filter(item => item.available);
+        const host = state.executors.find(item => item.id === hostHint) ?? (await window.showQuickPick(state.executors.map(item => ({
+            label: item.name || item.id, description: item.url, item,
+        })), { title: 'Config: Executor' }))?.item;
+        if (!host) return;
+        const credential = await window.showQuickPick([
+            ...credentials.map(item => ({ label: '$(key) ' + item.name, name: item.name })),
+            { label: 'No Credential', description: 'Only if the server accepts unauthenticated connections' },
+        ], { title: 'Config: Credential for ' + model.hostLabel(host.id) });
+        if (!credential) return;
+        const upstream = state.configs.filter(item => !item.error && !item.legacy);
+        const hop = await window.showQuickPick([
+            { label: 'Direct Connection' },
+            ...upstream.map(item => ({ label: '$(remote) ' + item.id, description: model.routeLabel(item), via: item.id })),
+        ], { title: 'Config: Jump Host (Optional)', placeHolder: 'Choose an upstream config to reuse its entire route' });
+        if (!hop) return;
+        const start = await window.showInputBox({ title: 'Config: Start Folder on ' + model.hostLabel(host.id),
+            value: state.configs.find(item => item.executor === host.id)?.startPath || '/',
+            prompt: 'Enter an absolute path, such as /workspace or C:/Users.',
+            validateInput: x => validate(x, remotePath),
+        });
+        if (!start) return;
+        const id = await window.showInputBox({ title: 'Config Name', value: state.configs.some(item => item.id === host.id && !item.legacy) ? '' : host.id,
+            validateInput: x => validate(x, niceId) });
+        if (!id) return;
+        await model.client().api('config.add', { id, executor: host.id, credential: credential.name, startPath: remotePath(start), via: hop.via });
+        await model.refresh();
+    }
+    guarded('addConfig', item => addConfig(item?.args?.host?.id));
 
     if (model.workspaceId) model.refresh();
 }

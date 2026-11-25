@@ -24,14 +24,14 @@ exports.run = async () => {
     const extension = vscode.extensions.getExtension('rexeterm.rexeterm-vscode-ext');
     assert(extension, 'Install RexE Term before running this test.');
     await extension.activate();
-    const { RexE } = require(path.join(extension.extensionPath, 'src', 'rexe'));
+    const { Model } = require(path.join(extension.extensionPath, 'src', 'model'));
     const { fromUri, uriParts, shLiteral } = require(path.join(extension.extensionPath, 'src', 'paths'));
     const fixtures = JSON.parse(await fs.readFile(process.env.REXE_MULTI_FIXTURES, 'utf8'));
     const destination = process.env.REXE_MULTI_REPORT;
-    const settings = workspace.getConfiguration('rexeterm');
     const storage = process.env.REXE_SMOKE_STORAGE;
     assert(storage, 'Set REXE_SMOKE_STORAGE to the test profile extension storage.');
-    const api = RexE.forExtension(extension.extensionPath, storage, settings.get('clientDirectory'), settings.get('localExecutor'));
+    const model = new Model({ extensionPath: extension.extensionPath, globalStorageUri: Uri.file(storage), workspaceState: { get() {} } });
+    const api = model.client();
     const report = { version: extension.packageJSON.version, simultaneousFolders: 0, simultaneousPTYs: 0, targets: [] };
     const read = async uri => Buffer.from(await workspace.fs.readFile(uri)).toString('utf8');
     const items = fixtures.map(target => {
@@ -53,9 +53,9 @@ exports.run = async () => {
         assert.equal(workspace.workspaceFolders?.length, items.length);
         assert.equal(new Set(workspace.workspaceFolders.map(f => fromUri(f.uri).id)).size, items.length);
         report.simultaneousFolders = items.length;
-        const { executors } = await api.online();
-        const names = new Map((await api.saved()).items.map(row => [row.id, row.name]));
-        for (const item of items) assert(executors.some(row => row.id === item.id), item.id + ' is offline');
+        const state = await model.load(true);
+        assert.ifError(state.error);
+        for (const item of items) assert(state.online.some(row => row.id === item.id), item.id + ' is offline');
 
         // All roots use the same file name. Read across all roots concurrently, then use each
         // real editor to save its own marker. An executor mix-up would change another root's copy.
@@ -81,7 +81,7 @@ exports.run = async () => {
                 'VS Code did not focus the requested editor');
             const terminal = await commands.executeCommand('rexeterm.newTerminal');
             assert(terminal, 'No terminal opened');
-            if (terminal.name !== 'RexE: ' + (names.get(item.id) ?? item.id)) {
+            if (terminal.name !== 'RexE: ' + model.label(item.id)) {
                 terminal.dispose();
                 assert.fail('Terminal opened for another executor: ' + terminal.name);
             }

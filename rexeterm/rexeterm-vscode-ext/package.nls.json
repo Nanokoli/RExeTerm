@@ -4,8 +4,9 @@
   "command.refresh": "Refresh",
   "command.settings": "Settings",
   "command.addExecutor": "Add Executor…",
-  "command.linkCredential": "Link Credential Profile…",
-  "command.connect": "Connect to Executor…",
+  "command.importCredential": "Import Credential…",
+  "command.addConfig": "Add Config…",
+  "command.connect": "Connect a Config…",
   "command.chooseExecutorAction": "Executor Actions…",
   "command.executorInfo": "Executor Info",
   "command.disconnect": "Disconnect",
@@ -22,8 +23,9 @@
   "command.stopForward": "Stop Forwarding",
   "view.active": "Active Executors",
   "view.saved": "Executors",
-  "view.credentials": "Credentials (CRs)",
+  "view.credentials": "Credentials",
+  "view.configs": "Configs",
   "view.ports": "RexE Ports",
-  "config.clientDirectory": "Optional absolute local directory containing .rexeterm/config-dir with saved executors and credential profiles. Defaults to this extension's storage.",
+  "config.clientDirectory": "Optional absolute local directory containing .rexeterm/config-dir for hosts, credentials and connection configs. Defaults to this extension's storage.",
   "config.localExecutor": "Show the built-in local executor in this VS Code profile with the current user's permissions."
 }

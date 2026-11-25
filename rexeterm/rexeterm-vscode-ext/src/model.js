@@ -54,23 +54,38 @@ class Model {
         this.onChange?.();
     }
 
-    label(id) { return this.cached?.saved.find(item => item.id === id)?.name || id; }
+    config(id) { return this.cached?.configs.find(item => item.id === id); }
+
+    hostLabel(id) { return this.cached?.executors.find(item => item.id === id)?.name || id; }
+
+    label(id) {
+        const saved = this.config(id);
+        return saved?.legacy ? this.hostLabel(saved.executor) : id;
+    }
+
+    routeLabel(config) {
+        const hosts = (config.route ?? [config.id]).map(id => this.hostLabel(this.config(id)?.executor ?? id));
+        return hosts.join(' → ');
+    }
 
     root(executor) {
         const windows = executor.system === 'windows';
-        const saved = this.cached?.saved.find(item => item.id === executor.id);
-        try { return remotePath(saved?.root || executor.root || (windows ? 'C:/' : '/'), windows); }
+        const saved = this.config(executor.id);
+        if (saved && !saved.legacy) return remotePath(saved.startPath, windows);
+        try { return remotePath(saved?.startPath || executor.root || (windows ? 'C:/' : '/'), windows); }
         catch { return windows ? 'C:/' : '/'; }
     }
 
     async snapshot() {
         const api = this.client();
-        const [saved, creds, live] = await Promise.allSettled([api.saved(), api.credentials(), api.online()]);
+        const [inventory, live] = await Promise.allSettled([api.inventory(), api.online()]);
+        const saved = inventory.value;
+        const configs = saved?.configs ?? [];
         const state = {
-            saved: saved.value?.items ?? [], invalid: saved.value?.failures ?? [],
-            credentials: creds.value ?? [],
+            executors: saved?.executors ?? [], configs, failures: saved?.failures ?? {},
+            credentials: saved?.credentials ?? [],
             online: live.value?.executors ?? [], defaultId: live.value?.defaultId,
-            error: live.reason?.message || saved.reason?.message || creds.reason?.message,
+            error: live.reason?.message || inventory.reason?.message,
         };
         const existing = id => state.online.some(item => item.id === id);
         this.selectedId = [this.selectedId, this.workspaceId, state.defaultId, state.online[0]?.id].find(id => id && existing(id));
@@ -81,7 +96,7 @@ class Model {
         if (!fresh && this.cached) return this.cached;
         if (this.loading) return this.loading;
         this.loading = this.snapshot()
-            .catch(error => ({ saved: [], invalid: [], credentials: [], online: [], error: error.message }))
+            .catch(error => ({ executors: [], configs: [], failures: {}, credentials: [], online: [], error: error.message }))
             .then(result => { this.cached = result; return result; })
             .finally(() => { this.loading = undefined; });
         return this.loading;

@@ -35,9 +35,12 @@ pub fn private_file(path: &Path) -> Result<()> {
     }
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
         // Use the process token's SID, not an environment-provided account name.
         let output = std::process::Command::new("whoami.exe")
             .args(["/user", "/fo", "csv", "/nh"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()?;
         ensure!(output.status.success(), "cannot determine config owner SID");
         let text = String::from_utf8(output.stdout)?;

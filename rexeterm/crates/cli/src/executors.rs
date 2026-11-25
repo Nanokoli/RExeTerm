@@ -1,4 +1,6 @@
 //! Project executor entries, independent credential links, and live inventory decoding.
+pub mod configs;
+
 use crate::{ipc_client::IpcClient, preferences};
 use anyhow::{ensure, Context, Result};
 use rexeterm_appcore::{client::ConnectExecutorOptions, config};
@@ -7,6 +9,8 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+
+const CREDENTIAL_FIELDS: [&str; 3] = ["username", "authentication", "tls"];
 
 fn directory() -> Result<PathBuf> {
     Ok(preferences::directory()?.join("executors"))
@@ -296,11 +300,10 @@ pub fn connection(id: &str, credential: Option<&str>) -> Result<Value> {
             !profile["authentication"].is_null() || !profile["tls"].is_null(),
             "credential {name} has no authentication or tls options"
         );
-        let fields = ["username", "authentication", "tls"];
         let target = entry
             .as_object_mut()
             .context("executor entry must be an object")?;
-        for key in fields {
+        for key in CREDENTIAL_FIELDS {
             target.remove(key);
             if let Some(value) = profile.get(key) {
                 target.insert(key.to_owned(), value.clone());

@@ -2,7 +2,7 @@
 //! The native host is shared across VS Code windows in the same profile.
 use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand};
-use rexeterm_cli::{directory, executors, host, services};
+use rexeterm_cli::{directory, executors, executors::configs, host, services};
 use rexeterm_cli_host::{ipc, Registry};
 use serde_json::{json, Value};
 use std::{
@@ -63,6 +63,7 @@ async fn dispatch(registry_dir: PathBuf, local: bool, request: Value) -> Result<
     };
     // Local inventory edits don't need a daemon or a network connection.
     match operation {
+        "inventory" => return configs::inventory(),
         "executor.add" => {
             let id = required("id")?;
             executors::validate_alias(id)?;
@@ -71,28 +72,46 @@ async fn dispatch(registry_dir: PathBuf, local: bool, request: Value) -> Result<
                 !url.contains(['@', '?', '#']) && !url.chars().any(char::is_whitespace),
                 "expected a RexE endpoint",
             );
-            return executors::save(
-                id,
-                json!({"id":id,"name":id,"url":url,"root":required("root")?}),
+            let address = url::Url::parse(url).context("expected a RexE endpoint")?;
+            ensure!(
+                match address.scheme() {
+                    "tcp" | "tls" =>
+                        address.has_host()
+                            && address.port().is_some_and(|p| p != 0)
+                            && matches!(address.path(), "" | "/"),
+                    "ws" | "wss" =>
+                        address.has_host()
+                            && address.port_or_known_default().is_some_and(|p| p != 0),
+                    "unix" => !address.has_host() && address.path().starts_with('/'),
+                    _ => false,
+                },
+                "expected a RexE endpoint, such as tls://host:45957",
             );
+            return executors::save(id, json!({"id":id,"name":id,"url":url}));
         }
-        "credential.link" => {
-            let profile = Path::new(required("profile")?);
-            ensure!(profile.is_absolute(), "profile path must be absolute");
-            return executors::link_credential(required("name")?, profile);
+        "credential.import" => {
+            return configs::import_credential(required("name")?, Path::new(required("profile")?))
         }
+        "config.add" => return configs::add(args.clone()),
         _ => {}
     }
 
     let (call, payload) = match operation {
-        "list_executor" => ("rpc", json!({"tool":"list_executor","params":{}})),
-        "executor.connect" => {
+        "list_executor" => (
+            "rpc",
+            json!({"tool":"list_executor","params":{},"includeJumpMetadata":true}),
+        ),
+        "config.connect" => {
             let id = required("id")?;
-            let params = executors::connection(id, args["credential"].as_str())?;
-            (
-                "rpc",
-                json!({"executor":id,"tool":"connect_to_executor","params":params}),
-            )
+            let hops = configs::connection(id, args["legacyCredential"].as_str())?;
+            if hops.len() == 1 {
+                (
+                    "rpc",
+                    json!({"executor":id,"tool":"connect_to_executor","params":hops[0]}),
+                )
+            } else {
+                ("hosts.connect_chain", json!({"id":id,"hops":hops}))
+            }
         }
         // Keep the bridge surface limited to operations the extension uses.
         "rpc" => {

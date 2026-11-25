@@ -1,9 +1,6 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const fs = require('node:fs/promises');
-const os = require('node:os');
-const path = require('node:path');
 const test = require('node:test');
 const { RexE } = require('../src/rexe');
 const { uriParts, fromUri, joinRemote, isRoot, endpointHost, portNumber } = require('../src/paths');
@@ -38,29 +35,6 @@ test('port inputs yield valid destinations and reject unrelated text', () => {
     for (const value of ['0','65536','-1','2.5','3:4']) assert.throws(() => portNumber(value));
     assert.throws(() => endpointHost('localhost:8080'));
     assert.throws(() => endpointHost('http://localhost'));
-});
-
-test('inventory handles both layout generations without returning profile secrets', async t => {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rexe-vscode-test-'));
-    t.after(() => fs.rm(directory, { recursive:true, force:true }));
-    const root = path.join(directory, '.rexeterm', 'config-dir');
-    await fs.mkdir(path.join(root, 'executors', 'example'), { recursive:true });
-    await fs.mkdir(path.join(root, 'credentials'));
-    await fs.writeFile(path.join(root, 'credentials', 'example.json'), '{"password":"local-secret"}');
-    await fs.writeFile(path.join(root, 'executors', 'bad.json'), 'not json');
-    await fs.writeFile(path.join(root, 'executors', 'example.json'), JSON.stringify({ id:'example', name:'Legacy', root:'/' }));
-    await fs.writeFile(path.join(root, 'executors', 'example', 'executor.json'), JSON.stringify({
-        id:'example', name:'Current', url:'tls://host:123', root:'/workspace', connectionProfile:'../example.json', password:'local-secret',
-    }));
-    await fs.writeFile(path.join(root, 'executors', 'unsafe.json'), JSON.stringify({ id:'unsafe', url:'tls://user:local-secret@host:123' }));
-    const rx = new RexE({ directory });
-    const result = await rx.saved();
-    assert.deepEqual(result.failures, ['bad.json']);
-    assert.deepEqual(result.items.map(e => [e.id,e.name,e.url,e.hasProfile]), [
-        ['example','Current','tls://host:123',true], ['unsafe','unsafe',undefined,false],
-    ]);
-    assert.deepEqual(await rx.credentials(), [{ name:'example', available:true }]);
-    assert.doesNotMatch(JSON.stringify(result), /local-secret/);
 });
 
 test('directory listing follows CLI pages without using recursive glob', async () => {

@@ -3511,6 +3511,7 @@ dependencies = [
  "rexeterm-application",
  "rexeterm-cli-host",
  "rexeterm-daemon",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

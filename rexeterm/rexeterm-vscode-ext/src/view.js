@@ -43,8 +43,9 @@ class RexEViews {
         const ports = new vscode.EventEmitter();
         const saved = new vscode.EventEmitter();
         const credentials = new vscode.EventEmitter();
+        const configs = new vscode.EventEmitter();
         this.model = model;
-        this.events = { active, ports, saved, credentials };
+        this.events = { active, ports, saved, credentials, configs };
         this.views = {};
         for (const [name, emitter] of Object.entries(this.events)) {
             const tree = vscode.window.createTreeView('rexeterm.' + name, {
@@ -73,18 +74,29 @@ class RexEViews {
                 return m.credentials.length ? m.credentials.map(credential => new Node(credential.name, 'credential', {
                     id: 'credential:' + credential.name, glyph: credential.available ? 'key' : 'warning',
                     description: credential.available ? undefined : 'Missing profile', args: { credential },
-                })) : [empty('No credential links')];
+                })) : [empty('No saved credentials')];
             }
             if (view === 'saved') {
-                const nodes = m.saved.map(saved => {
-                    const online = m.online.some(item => item.id === saved.id);
-                    return new Node(saved.name, online ? 'savedOnline' : 'savedOffline', {
-                        id: 'saved:' + saved.id, glyph: 'server', description: online ? 'Online' : saved.id === saved.name ? undefined : saved.id,
-                        tooltip: [saved.root, saved.url].filter(Boolean).join('\n'), args: { saved }, command: online ? 'chooseExecutorAction' : 'connect',
+                const nodes = m.executors.map(host => new Node(host.name || host.id, 'executorHost', {
+                    id: 'saved:' + host.id, glyph: 'server', description: host.url, tooltip: host.url, args: { host },
+                }));
+                for (const bad of m.failures.executors ?? []) nodes.push(empty('Cannot read ' + bad, 'warning'));
+                return nodes.length ? nodes : [empty('No saved executors')];
+            }
+            if (view === 'configs') {
+                const nodes = m.configs.map(config => {
+                    const connected = m.online.some(executor => executor.id === config.id);
+                    const route = this.model.routeLabel(config);
+                    return new Node(this.model.label(config.id), connected ? 'configOnline' : config.error ? 'configInvalid' : 'configOffline', {
+                        id: 'config:' + config.id,
+                        glyph: connected ? 'debug-connected' : config.error ? 'warning' : 'settings',
+                        description: [connected ? 'Online' : undefined, route, config.legacy ? 'Legacy' : undefined].filter(Boolean).join(' · '),
+                        tooltip: [route, config.startPath, config.credential, config.error].filter(Boolean).join('\n'),
+                        args: { config }, command: connected ? 'chooseExecutorAction' : 'connect',
                     });
                 });
-                for (const bad of m.invalid) nodes.push(empty('Cannot read ' + bad, 'warning'));
-                return nodes.length ? nodes : [empty('No saved executors')];
+                for (const bad of m.failures.configs ?? []) nodes.push(empty('Cannot read ' + bad, 'warning'));
+                return nodes.length ? nodes : [empty('No connection configs')];
             }
             if (view === 'ports') {
                 if (m.error) return [empty(m.error, 'warning')];
@@ -95,8 +107,9 @@ class RexEViews {
             if (!m.online.length) return [empty('No active executors')];
             return m.online.map(executor => {
                 const selected = executor.id === this.model.selectedId;
+                const config = this.model.config(executor.id);
                 return new Node(this.model.label(executor.id), 'online', {
-                    id: 'online:' + executor.id, description: [selected ? 'Selected' : undefined, executor.system].filter(Boolean).join(' · '),
+                    id: 'online:' + executor.id, description: [selected ? 'Selected' : undefined, config && config.executor !== executor.id ? this.model.hostLabel(config.executor) : undefined, executor.system].filter(Boolean).join(' · '),
                     glyph: selected ? 'debug-connected' : 'remote', fold: Fold.Collapsed, command: 'chooseExecutorAction',
                     args: { executor }, tooltip: [executor.id, executor.device, executor.url].filter(Boolean).join('\n'),
                 });

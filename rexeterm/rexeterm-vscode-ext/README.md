@@ -5,9 +5,13 @@ Open a folder on a RexE executor in the VS Code Explorer. Read and edit files, s
 ## Install and connect
 
 1. In **Extensions: Install from VSIX…**, choose the package for the computer running VS Code. The extension starts its bundled backend when used.
-2. Open **RexE Term** in the activity bar, add an executor in **Executors** and link its connection profile under **Credentials (CRs)**. Click the executor to connect. For local use, enable **RexE: Local Executor**.
-3. To reuse existing saved executors and credentials, set **RexE: Client Directory** to the local directory containing `.rexeterm/config-dir`. Connect once in VS Code; the extension manages its own sessions across its windows. The old **CLI Path** and **Registry Directory** settings are no longer needed.
-4. Click an active executor and choose **Open RexE Folder…** or **Executor Info**. Expand it to see **Folders**, **PTY**, **File Transfers**, and **Port Forwards**.
+2. Open **RexE Term** in the activity bar. In **Executors**, save each host's ID and RexE endpoint. In **Credentials**, import a local JSON credential profile. Import keeps only the login and TLS settings and resolves any relative certificate paths against the original profile.
+3. In **Configs**, choose an executor, a credential and the starting folder on that host. Choose **No Credential** only if the server accepts unauthenticated connections. A config can connect directly or choose another config under **Jump Host**. Click a config to connect. Different configs can connect to the same host at the same time; their names identify the sessions and their VS Code folders.
+4. **Active Executors** lists the hosts you connected to. Choose **Open RexE Folder…** or **Executor Info** to see the folder or the connection route. Expand a connection to see **Folders**, **PTY**, **File Transfers**, and **Port Forwards**. For local use, enable **RexE: Local Executor**.
+
+To reuse an existing inventory, set **RexE: Client Directory** to the local directory containing `.rexeterm/config-dir`. Existing executor entries with a starting path or saved credentials still appear as legacy configs with their original IDs. Create a named config to use a saved host as a jump. Using the original ID for a named config keeps existing workspace folders associated with that ID.
+
+For example, create a direct **gateway** config, then create **build-container** with **gateway** as its jump and `/workspace` as its start folder. If **gateway** needs an upstream config, RexE follows the full chain automatically. The client must reach the first host; each following address must be reachable from the preceding executor, which needs permission to forward ports. If the gateway cannot resolve a Docker service name, use the container's Docker bridge IP and keep the certificate's name in the credential's `tls.serverName`. RexE verifies the target's TLS identity through each forward.
 
 You can open a folder from the sidebar, the remote indicator in the status bar, the Command Palette, or **File → New File… → Open RexE Folder…**. VS Code's stable extension API does not offer a contribution point for a direct top-level File menu item.
 

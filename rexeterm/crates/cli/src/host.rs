@@ -595,9 +595,16 @@ impl State {
                     }
                     _ => None,
                 };
-                let value = app
+                let mut value = app
                     .rpc(executor.as_deref(), tool, params, directory)
                     .await?;
+                if tool == "list_executor" && args["includeJumpMetadata"] == true {
+                    // Inventory must stay responsive while a route is connecting.
+                    if let Ok(routes) = self.routes.try_lock() {
+                        value["metadata"]["jumpExecutors"] =
+                            json!(routes.jump_executors().collect::<Vec<_>>());
+                    }
+                }
                 if tool == "exbash"
                     && value["metadata"]["asyncID"]
                         .as_str()

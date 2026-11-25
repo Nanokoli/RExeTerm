@@ -22,6 +22,14 @@ struct Route {
 }
 
 impl Routes {
+    pub(super) fn jump_executors(&self) -> impl Iterator<Item = &str> {
+        self.active.iter().flat_map(|route| {
+            route.executors[..route.executors.len() - 1]
+                .iter()
+                .map(String::as_str)
+        })
+    }
+
     pub(super) async fn connect(
         &mut self,
         app: &Application,

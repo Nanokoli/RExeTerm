@@ -8,7 +8,6 @@ const { psLiteral, shLiteral, isRoot } = require('./paths');
 
 const rows = value => Array.isArray(value) ? value : [];
 const string = value => typeof value === 'string' ? value : undefined;
-const publicUrl = value => string(value) && !/[@?#\r\n]/.test(value) ? value : undefined;
 const editorFileLimit = 256 * 1024 * 1024;
 
 function checkEditorFileSize(size) {
@@ -93,51 +92,16 @@ class RexE {
 
     async online() {
         const value = (await this.api('list_executor', {}, 25_000)).metadata ?? {};
-        return { executors: rows(value.executors), defaultId: string(value.default) };
+        const jumps = new Set(rows(value.jumpExecutors));
+        return { executors: rows(value.executors).filter(item => !jumps.has(item.id)), defaultId: string(value.default) };
     }
 
-    async saved() {
-        const dir = path.join(this.directory, '.rexeterm', 'config-dir', 'executors');
-        const entries = await this.entries(dir);
-        const failures = [];
-        const candidates = await Promise.all(entries.map(async entry => {
-            const filename = entry.isDirectory()
-                ? path.join(dir, entry.name, 'executor.json')
-                : (entry.name.endsWith('.json') ? path.join(dir, entry.name) : undefined);
-            if (!filename) return undefined;
-            try {
-                const data = JSON.parse(await fs.readFile(filename, 'utf8'));
-                if (!string(data.id)) throw new Error('Missing executor ID');
-                return { id: data.id, name: string(data.name) || data.id, root: string(data.root), url: publicUrl(data.url),
-                    hasProfile: typeof data.connectionProfile === 'string', preferred: entry.isDirectory() };
-            } catch (error) {
-                if (error.code !== 'ENOENT') failures.push(entry.name);
-                return undefined;
-            }
-        }));
-        const result = new Map();
-        for (const entry of candidates.filter(Boolean)) {
-            if (entry.preferred || !result.has(entry.id)) result.set(entry.id, entry);
-        }
-        return { items: [...result.values()].sort((a, b) => a.name.localeCompare(b.name)), failures };
-    }
+    inventory() { return this.api('inventory'); }
 
-    async credentials() {
-        const dir = path.join(this.directory, '.rexeterm', 'config-dir', 'credentials');
-        const entries = await this.entries(dir);
-        return Promise.all(entries.filter(entry => entry.name.endsWith('.json')).sort((a, b) => a.name.localeCompare(b.name)).map(async entry => ({
-            name: entry.name.slice(0, -5),
-            available: await fs.stat(path.join(dir, entry.name)).then(stat => stat.isFile(), () => false),
-        })));
-    }
-
-    async entries(dir) {
-        try { return await fs.readdir(dir, { withFileTypes: true }); }
-        catch (error) { if (error.code === 'ENOENT') return []; throw error; }
-    }
-
-    connect(id, credential) {
-        return this.api('executor.connect', { id, credential }, 65_000);
+    connect(config, legacyCredential) {
+        // The shared backend allows up to 60 seconds per hop.
+        const hops = config.route?.length || 1;
+        return this.api('config.connect', { id: config.id, legacyCredential }, 60_000 * hops + 5_000);
     }
 
     stat(host, file) {
@@ -275,4 +239,4 @@ class RexE {
     }
 }
 
-module.exports = { RexE, rows, string, publicUrl };
+module.exports = { RexE, rows, string };
